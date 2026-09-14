@@ -80,6 +80,29 @@ function extractAddressBlock(lines, startIdx, endIdx) {
   return block;
 }
 
+// A line that's just digits/parens/dashes/spaces, at least 7 characters
+// of them -- used to spot a phone number sitting as its own line at the
+// end of an address block (true on every sample seen: domestic and
+// international alike put the recipient's phone as the last address
+// line, and the sender's own block never has a bare-digit line like
+// this that isn't a phone).
+const PHONE_LINE_RE = /^[(+]?[\d][\d\s\-().]{6,}$/;
+
+// First line of a block is always the name; if the last remaining line
+// looks like a phone, split it off; whatever's left in between is the
+// address, joined into one string.
+function decomposeBlock(block) {
+  if (!block.length) return { name: null, address: null, phone: null };
+  const name = block[0];
+  let rest = block.slice(1);
+  let phone = null;
+  if (rest.length && PHONE_LINE_RE.test(rest[rest.length - 1])) {
+    phone = rest[rest.length - 1];
+    rest = rest.slice(0, -1);
+  }
+  return { name, address: rest.length ? rest.join(", ") : null, phone };
+}
+
 function parseLabelText(lines) {
   const text = lines.join("\n");
 
@@ -101,8 +124,8 @@ function parseLabelText(lines) {
     isInternational: null,
     service: null,
     serviceConfidence: null,
-    senderBlock: [],
-    recipientBlock: [],
+    sender: { name: null, address: null, phone: null },
+    recipient: { name: null, address: null, phone: null },
     parseStatus: "ok",
     warnings: [],
   };
@@ -191,15 +214,17 @@ function parseLabelText(lines) {
   const originIdx = lines.findIndex((l) => l.startsWith("ORIGIN ID:"));
   const cadIdx = lines.findIndex((l) => l.startsWith("CAD:"));
 
+  let senderBlock = [];
   if (originIdx !== -1 && cadIdx !== -1 && cadIdx > originIdx) {
     // pdf.js's hasEOL-based line breaks merge "ORIGIN ID:xxxx" with the
     // account-number/phone line that follows it into one reconstructed
     // line (PyMuPDF kept them as two separate lines) -- so the sender
     // name starts right after the ORIGIN ID line here, not two lines
     // after it.
-    result.senderBlock = extractAddressBlock(lines, originIdx + 1, cadIdx);
+    senderBlock = extractAddressBlock(lines, originIdx + 1, cadIdx);
   }
 
+  let recipientBlock = [];
   if (cadIdx !== -1) {
     let endIdx = lines.length;
     for (let i = cadIdx + 1; i < lines.length; i++) {
@@ -212,18 +237,34 @@ function parseLabelText(lines) {
     if (recipientLines.length && recipientLines[0].startsWith("TO ")) {
       recipientLines[0] = recipientLines[0].slice(3).trim();
     }
-    const phoneRe = /^[(+]?[\d][\d\s\-)]{6,}$/;
     for (let i = 0; i < recipientLines.length; i++) {
-      if (phoneRe.test(recipientLines[i])) {
+      if (PHONE_LINE_RE.test(recipientLines[i])) {
         recipientLines = recipientLines.slice(0, i + 1);
         break;
       }
     }
-    result.recipientBlock = recipientLines;
+    recipientBlock = recipientLines;
   }
 
-  if (!result.senderBlock.length) result.warnings.push("senderBlock not confidently extracted");
-  if (!result.recipientBlock.length) result.warnings.push("recipientBlock not confidently extracted");
+  result.sender = decomposeBlock(senderBlock);
+  result.recipient = decomposeBlock(recipientBlock);
+
+  // The sender's phone (when there is one) is merged into the ORIGIN ID
+  // line itself, not a separate block line -- e.g.
+  // "ORIGIN ID:OTSA (206) 683-4772". Only pull it out when it's in the
+  // unambiguous US "(nnn) nnn-nnnn" format: that same line can instead
+  // hold a bare digit string (e.g. "14709193520" on the domestic
+  // sample) that's FedEx's own account/meter number, not a phone --
+  // and a bare string like that is visually indistinguishable from a
+  // foreign phone number, so it's deliberately left alone rather than
+  // guessed at.
+  if (!result.sender.phone && originIdx !== -1) {
+    const phoneMatch = /(\(\d{3}\)\s?\d{3}-\d{4})/.exec(lines[originIdx]);
+    if (phoneMatch) result.sender.phone = phoneMatch[1];
+  }
+
+  if (!result.sender.name) result.warnings.push("sender name/address not confidently extracted");
+  if (!result.recipient.name) result.warnings.push("recipient name/address not confidently extracted");
 
   if (result.warnings.length) result.parseStatus = "needsReview";
 

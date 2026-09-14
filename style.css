@@ -354,6 +354,47 @@ tr:hover td { background: var(--hover-bg); }
 
 [hidden] { display: none !important; }
 
+code {
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+
+/* ---- Tabs ---- */
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.tab-btn {
+  border: none;
+  background: none;
+  color: var(--sub);
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+.tab-btn:hover { background: var(--hover-bg); }
+.tab-btn.active {
+  background: var(--c-violet-soft);
+  color: var(--c-violet);
+}
+
+/* ---- Filter bar (Expenses tab) ---- */
+.filter-bar {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.filter-bar .field { min-width: 150px; flex: 1 1 150px; }
+.filter-bar .btn { white-space: nowrap; }
+
 .section-title {
   font-size: 12px;
   font-weight: 700;

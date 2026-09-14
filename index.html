@@ -27,6 +27,13 @@
 
   <main id="app" hidden>
 
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tabBtnLog" type="button">Log Shipment</button>
+      <button class="tab-btn" id="tabBtnExpenses" type="button">Expenses by Project</button>
+    </div>
+
+    <section id="tabLog">
+
     <div class="card">
       <h2>Drag in a FedEx label PDF</h2>
       <p class="card-sub">FedEx Ship Manager labels only, domestic or international. The label's Terms &amp; Conditions / folding-instructions image (if present) is ignored automatically — only the label text is read.</p>
@@ -83,13 +90,37 @@
           <label>Invoice / PO / Dept</label>
           <input type="text" id="f_invPoDept" />
         </div>
-        <div class="field full">
-          <label>Sender</label>
-          <textarea id="f_sender" rows="3"></textarea>
+      </div>
+
+      <p class="section-title" style="margin-top:20px;">Sender</p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" id="f_senderName" />
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="text" id="f_senderPhone" />
         </div>
         <div class="field full">
-          <label>Recipient</label>
-          <textarea id="f_recipient" rows="3"></textarea>
+          <label>Address</label>
+          <input type="text" id="f_senderAddress" />
+        </div>
+      </div>
+
+      <p class="section-title" style="margin-top:20px;">Recipient</p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" id="f_recipientName" />
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="text" id="f_recipientPhone" />
+        </div>
+        <div class="field full">
+          <label>Address</label>
+          <input type="text" id="f_recipientAddress" />
         </div>
       </div>
 
@@ -126,6 +157,7 @@
             <th>Service</th>
             <th>Dest</th>
             <th>Project</th>
+            <th>Submitted by</th>
             <th>Price</th>
             <th>Status</th>
           </tr>
@@ -134,6 +166,87 @@
       </table>
       <div class="empty-row" id="logEmptyRow">No shipments added yet this session.</div>
     </div>
+
+    </section>
+
+    <section id="tabExpenses" hidden>
+
+      <div class="card">
+        <h2>Expenses by Project</h2>
+        <p class="card-sub">Reflects this session's log only, not the full Excel history yet — once Power Automate is wired up (phase 2), this reads the real <code>Shipments</code> tab instead.</p>
+
+        <div class="filter-bar">
+          <div class="field">
+            <label>Project</label>
+            <select id="exp_project"><option value="">All projects</option></select>
+          </div>
+          <div class="field">
+            <label>Submitted by</label>
+            <select id="exp_submittedBy"><option value="">Everyone</option></select>
+          </div>
+          <div class="field">
+            <label>Destination</label>
+            <select id="exp_destination">
+              <option value="">All</option>
+              <option value="domestic">Domestic</option>
+              <option value="international">International</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>From</label>
+            <input type="date" id="exp_dateFrom" />
+          </div>
+          <div class="field">
+            <label>To</label>
+            <input type="date" id="exp_dateTo" />
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button class="btn" id="exp_clearFilters" type="button">Clear filters</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="section-title">Total (filtered)</p>
+        <div id="exp_summary" style="font-size:22px; font-weight:700;">$0.00 <span style="font-size:13px; font-weight:500; color:var(--sub);">across 0 shipments</span></div>
+      </div>
+
+      <div class="card">
+        <h2>By project</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Shipments</th>
+              <th>Total</th>
+              <th>Avg / shipment</th>
+            </tr>
+          </thead>
+          <tbody id="exp_rollupBody"></tbody>
+        </table>
+        <div class="empty-row" id="exp_rollupEmpty">No shipments match these filters.</div>
+      </div>
+
+      <div class="card">
+        <h2>Shipments (filtered)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Tracking #</th>
+              <th>Ship date</th>
+              <th>Project</th>
+              <th>Submitted by</th>
+              <th>Dest</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody id="exp_detailBody"></tbody>
+        </table>
+        <div class="empty-row" id="exp_detailEmpty">No shipments match these filters.</div>
+      </div>
+
+    </section>
 
   </main>
 

@@ -11,6 +11,7 @@ const STORAGE_USER_KEY = "fedexTracker_currentUser";
 const STORAGE_THEME_KEY = "fedexTracker_theme";
 
 let currentParsed = null;
+let currentUser = null;
 const sessionLog = [];
 
 // ---------- Dark mode ----------
@@ -43,6 +44,7 @@ function findCredential(login) {
 }
 
 function showApp(cred) {
+  currentUser = cred;
   document.getElementById("loginBackdrop").hidden = true;
   document.getElementById("app").hidden = false;
   document.getElementById("whoami").hidden = false;
@@ -50,6 +52,7 @@ function showApp(cred) {
 }
 
 function showLogin() {
+  currentUser = null;
   document.getElementById("loginBackdrop").hidden = false;
   document.getElementById("app").hidden = true;
   document.getElementById("whoami").hidden = true;
@@ -100,6 +103,24 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
     sel.appendChild(opt);
   }
 })();
+
+// ---------- Tabs ----------
+const tabBtnLog = document.getElementById("tabBtnLog");
+const tabBtnExpenses = document.getElementById("tabBtnExpenses");
+const tabLog = document.getElementById("tabLog");
+const tabExpenses = document.getElementById("tabExpenses");
+
+tabBtnLog.addEventListener("click", () => switchTab("log"));
+tabBtnExpenses.addEventListener("click", () => switchTab("expenses"));
+
+function switchTab(name) {
+  const onLog = name === "log";
+  tabBtnLog.classList.toggle("active", onLog);
+  tabBtnExpenses.classList.toggle("active", !onLog);
+  tabLog.hidden = !onLog;
+  tabExpenses.hidden = onLog;
+  if (!onLog) renderExpenses();
+}
 
 // ---------- Dropzone ----------
 const dropzone = document.getElementById("dropzone");
@@ -171,8 +192,12 @@ function populateConfirmForm(parsed) {
   if (parsed.dept) invPoDeptParts.push(`DEPT ${parsed.dept}`);
   document.getElementById("f_invPoDept").value = invPoDeptParts.join(" · ");
 
-  document.getElementById("f_sender").value = (parsed.senderBlock || []).join("\n");
-  document.getElementById("f_recipient").value = (parsed.recipientBlock || []).join("\n");
+  document.getElementById("f_senderName").value = parsed.sender.name || "";
+  document.getElementById("f_senderAddress").value = parsed.sender.address || "";
+  document.getElementById("f_senderPhone").value = parsed.sender.phone || "";
+  document.getElementById("f_recipientName").value = parsed.recipient.name || "";
+  document.getElementById("f_recipientAddress").value = parsed.recipient.address || "";
+  document.getElementById("f_recipientPhone").value = parsed.recipient.phone || "";
 
   // Service confidence pill
   const confPill = document.getElementById("serviceConfidencePill");
@@ -241,14 +266,22 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
     service: document.getElementById("f_service").value,
     destCountry: document.getElementById("f_destCountry").value,
     isInternational: currentParsed.isInternational,
+    senderName: document.getElementById("f_senderName").value,
+    senderAddress: document.getElementById("f_senderAddress").value,
+    senderPhone: document.getElementById("f_senderPhone").value,
+    recipientName: document.getElementById("f_recipientName").value,
+    recipientAddress: document.getElementById("f_recipientAddress").value,
+    recipientPhone: document.getElementById("f_recipientPhone").value,
     project,
     price: priceRaw ? parseFloat(priceRaw) : null,
     notes: document.getElementById("f_notes").value,
     parseStatus: currentParsed.parseStatus,
     sourceFile: currentParsed.sourceFile,
+    submittedBy: currentUser ? currentUser.name : null,
   };
   sessionLog.push(record);
   renderLog();
+  renderExpenses();
 
   currentParsed = null;
   document.getElementById("confirmCard").hidden = true;
@@ -282,10 +315,131 @@ function renderLog() {
       <td>${escapeHtml(r.service || "—")}</td>
       <td>${destPill} ${escapeHtml(r.destCountry || "")}</td>
       <td>${escapeHtml(r.project)}</td>
+      <td>${escapeHtml(r.submittedBy || "—")}</td>
       <td>${priceStr}</td>
       <td>${statusPill}</td>
     `;
     body.appendChild(tr);
+  }
+}
+
+// ---------- Expenses by Project tab ----------
+(function populateExpenseFilters() {
+  const projectSel = document.getElementById("exp_project");
+  for (const p of PROJECTS) {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.textContent = p.archived ? `${p.name} (archived)` : p.name;
+    projectSel.appendChild(opt);
+  }
+  const bySel = document.getElementById("exp_submittedBy");
+  for (const c of CREDENTIALS) {
+    const opt = document.createElement("option");
+    opt.value = c.name;
+    opt.textContent = c.name;
+    bySel.appendChild(opt);
+  }
+})();
+
+["exp_project", "exp_submittedBy", "exp_destination", "exp_dateFrom", "exp_dateTo"].forEach((id) => {
+  document.getElementById(id).addEventListener("input", renderExpenses);
+  document.getElementById(id).addEventListener("change", renderExpenses);
+});
+
+document.getElementById("exp_clearFilters").addEventListener("click", () => {
+  document.getElementById("exp_project").value = "";
+  document.getElementById("exp_submittedBy").value = "";
+  document.getElementById("exp_destination").value = "";
+  document.getElementById("exp_dateFrom").value = "";
+  document.getElementById("exp_dateTo").value = "";
+  renderExpenses();
+});
+
+function getFilteredLog() {
+  const project = document.getElementById("exp_project").value;
+  const submittedBy = document.getElementById("exp_submittedBy").value;
+  const destination = document.getElementById("exp_destination").value;
+  const dateFrom = document.getElementById("exp_dateFrom").value;
+  const dateTo = document.getElementById("exp_dateTo").value;
+
+  return sessionLog.filter((r) => {
+    if (project && r.project !== project) return false;
+    if (submittedBy && r.submittedBy !== submittedBy) return false;
+    if (destination === "domestic" && r.isInternational !== false) return false;
+    if (destination === "international" && r.isInternational !== true) return false;
+    if (dateFrom && r.shipDate && r.shipDate < dateFrom) return false;
+    if (dateTo && r.shipDate && r.shipDate > dateTo) return false;
+    return true;
+  });
+}
+
+function renderExpenses() {
+  const filtered = getFilteredLog();
+
+  // Summary
+  let total = 0;
+  let priced = 0;
+  for (const r of filtered) {
+    if (r.price != null && !isNaN(r.price)) {
+      total += r.price;
+      priced++;
+    }
+  }
+  document.getElementById("exp_summary").innerHTML =
+    `$${total.toFixed(2)} <span style="font-size:13px; font-weight:500; color:var(--sub);">across ${filtered.length} shipment${filtered.length === 1 ? "" : "s"}${priced < filtered.length ? ` (${filtered.length - priced} without a price yet)` : ""}</span>`;
+
+  // Rollup by project
+  const rollup = new Map(); // project -> {count, total}
+  for (const r of filtered) {
+    const key = r.project || "(no project)";
+    if (!rollup.has(key)) rollup.set(key, { count: 0, total: 0 });
+    const entry = rollup.get(key);
+    entry.count++;
+    if (r.price != null && !isNaN(r.price)) entry.total += r.price;
+  }
+  const rollupBody = document.getElementById("exp_rollupBody");
+  const rollupEmpty = document.getElementById("exp_rollupEmpty");
+  rollupBody.innerHTML = "";
+  const rollupRows = [...rollup.entries()].sort((a, b) => b[1].total - a[1].total);
+  if (!rollupRows.length) {
+    rollupEmpty.hidden = false;
+  } else {
+    rollupEmpty.hidden = true;
+    for (const [project, entry] of rollupRows) {
+      const avg = entry.count ? entry.total / entry.count : 0;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(project)}</td>
+        <td>${entry.count}</td>
+        <td>$${entry.total.toFixed(2)}</td>
+        <td>$${avg.toFixed(2)}</td>
+      `;
+      rollupBody.appendChild(tr);
+    }
+  }
+
+  // Detail table
+  const detailBody = document.getElementById("exp_detailBody");
+  const detailEmpty = document.getElementById("exp_detailEmpty");
+  detailBody.innerHTML = "";
+  if (!filtered.length) {
+    detailEmpty.hidden = false;
+  } else {
+    detailEmpty.hidden = true;
+    for (const r of filtered) {
+      const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
+      const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(r.trackingNumber || "—")}</td>
+        <td>${escapeHtml(r.shipDate || "—")}</td>
+        <td>${escapeHtml(r.project)}</td>
+        <td>${escapeHtml(r.submittedBy || "—")}</td>
+        <td>${destPill}</td>
+        <td>${priceStr}</td>
+      `;
+      detailBody.appendChild(tr);
+    }
   }
 }
 
