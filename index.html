@@ -50,6 +50,7 @@
     <div class="card" id="confirmCard" hidden>
       <h2>Confirm shipment details</h2>
       <p class="card-sub">Auto-parsed from <span id="sourceFileName"></span> — check anything flagged below, then add the project and price.</p>
+      <p class="card-sub" id="queuePositionNote" hidden></p>
 
       <div class="confirm-layout">
         <div class="confirm-preview">
@@ -59,6 +60,8 @@
 
         <div class="confirm-fields">
 
+      <div id="multiPieceBanner" class="info-banner" hidden></div>
+
       <div id="warningsBanner" class="warning-banner" hidden>
         <strong>Needs a look:</strong>
         <ul id="warningsList"></ul>
@@ -67,8 +70,12 @@
       <p class="section-title">From the label</p>
       <div class="form-grid">
         <div class="field">
-          <label>Tracking number</label>
+          <label>Tracking number <span class="hint">(master, if multi-piece)</span></label>
           <input type="text" id="f_trackingNumber" />
+        </div>
+        <div class="field full" id="pieceTrackingRow" hidden>
+          <label>Other piece tracking numbers</label>
+          <input type="text" id="f_pieceTrackingNumbers" readonly />
         </div>
         <div class="field">
           <label>Ship date</label>

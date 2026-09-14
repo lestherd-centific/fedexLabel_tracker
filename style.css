@@ -320,6 +320,15 @@ button {
 }
 .warning-banner ul { margin: 6px 0 0; padding-left: 18px; }
 
+.info-banner {
+  background: var(--c-violet-soft);
+  color: var(--c-violet);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
 /* ---- Table ---- */
 table {
   width: 100%;

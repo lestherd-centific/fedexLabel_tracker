@@ -14,6 +14,13 @@ let currentParsed = null;
 let currentUser = null;
 const sessionLog = [];
 
+// A single PDF can now yield more than one shipment record: a true
+// multi-piece shipment stays one record (pieces bundled in), but a
+// batch of unrelated single-piece labels dropped in as one PDF comes
+// back as separate records that get reviewed one at a time here.
+let parseQueue = [];
+let queueIndex = 0;
+
 // ---------- Dark mode ----------
 function applyTheme(theme) {
   if (theme === "dark") {
@@ -162,9 +169,14 @@ async function handleFile(file) {
   dropzoneIdle.hidden = true;
   dropzoneBusy.hidden = false;
   try {
-    const parsed = await parseFedexLabel(file);
-    currentParsed = parsed;
-    populateConfirmForm(parsed);
+    const records = await parseFedexLabelFile(file);
+    if (!records.length) {
+      alert("Couldn't find any FedEx label content in that PDF.");
+      return;
+    }
+    parseQueue = records;
+    queueIndex = 0;
+    loadQueueItem();
   } catch (err) {
     console.error(err);
     alert("Couldn't read that PDF. It may not be a FedEx Ship Manager label, or the file is corrupted.");
@@ -172,6 +184,34 @@ async function handleFile(file) {
     dropzoneIdle.hidden = false;
     dropzoneBusy.hidden = true;
     fileInput.value = "";
+  }
+}
+
+function loadQueueItem() {
+  currentParsed = parseQueue[queueIndex];
+  populateConfirmForm(currentParsed);
+
+  const note = document.getElementById("queuePositionNote");
+  if (parseQueue.length > 1) {
+    note.hidden = false;
+    note.textContent = `Shipment ${queueIndex + 1} of ${parseQueue.length} found in this PDF — reviewing one at a time.`;
+  } else {
+    note.hidden = true;
+  }
+}
+
+// After confirming or discarding one item, move to the next queued one
+// (a batch of unrelated labels in one PDF), or close out if that was
+// the last one.
+function advanceQueue() {
+  queueIndex++;
+  if (queueIndex < parseQueue.length) {
+    loadQueueItem();
+  } else {
+    parseQueue = [];
+    queueIndex = 0;
+    currentParsed = null;
+    document.getElementById("confirmCard").hidden = true;
   }
 }
 
@@ -191,7 +231,30 @@ function populateConfirmForm(parsed) {
   document.getElementById("f_shipDate").value = parsed.shipDate || "";
   document.getElementById("f_service").value = parsed.service || "";
   document.getElementById("f_destCountry").value = parsed.destCountry || "";
-  document.getElementById("f_weight").value = parsed.weight ? `${parsed.weight} ${parsed.weightUnit}` : "";
+
+  // Multi-piece shipment: banner, bundled piece tracking numbers, and a
+  // total-plus-breakdown weight instead of just one box's weight.
+  const multiBanner = document.getElementById("multiPieceBanner");
+  const pieceRow = document.getElementById("pieceTrackingRow");
+  if (parsed.isMultiPiece) {
+    multiBanner.hidden = false;
+    multiBanner.textContent = `Multi-piece shipment — ${parsed.pieceCount} boxes bundled under this master tracking number.`;
+    pieceRow.hidden = false;
+    document.getElementById("f_pieceTrackingNumbers").value = parsed.pieces
+      .map((p) => p.trackingNumber)
+      .filter((t) => t && t !== parsed.trackingNumber)
+      .join(", ");
+    const breakdown = parsed.pieces.map((p) => `${p.weight ?? "?"} ${p.weightUnit ?? ""}`.trim()).join(", ");
+    document.getElementById("f_weight").value = parsed.totalWeight
+      ? `${parsed.totalWeight} ${parsed.totalWeightUnit} total (${parsed.pieceCount} pieces: ${breakdown})`
+      : "";
+  } else {
+    multiBanner.hidden = true;
+    pieceRow.hidden = true;
+    document.getElementById("f_pieceTrackingNumbers").value = "";
+    document.getElementById("f_weight").value = parsed.weight ? `${parsed.weight} ${parsed.weightUnit}` : "";
+  }
+
   document.getElementById("f_dimensions").value = parsed.dimensions || "";
   document.getElementById("f_reference").value = parsed.reference || "";
 
@@ -257,8 +320,7 @@ function populateConfirmForm(parsed) {
 }
 
 document.getElementById("discardBtn").addEventListener("click", () => {
-  currentParsed = null;
-  document.getElementById("confirmCard").hidden = true;
+  advanceQueue();
 });
 
 document.getElementById("addToLogBtn").addEventListener("click", () => {
@@ -275,6 +337,11 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
     service: document.getElementById("f_service").value,
     destCountry: document.getElementById("f_destCountry").value,
     isInternational: currentParsed.isInternational,
+    isMultiPiece: currentParsed.isMultiPiece,
+    pieceCount: currentParsed.pieceCount,
+    pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
+    totalWeight: currentParsed.totalWeight,
+    totalWeightUnit: currentParsed.totalWeightUnit,
     senderName: document.getElementById("f_senderName").value,
     senderAddress: document.getElementById("f_senderAddress").value,
     senderPhone: document.getElementById("f_senderPhone").value,
@@ -292,8 +359,7 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
   renderLog();
   renderExpenses();
 
-  currentParsed = null;
-  document.getElementById("confirmCard").hidden = true;
+  advanceQueue();
 });
 
 // ---------- Session log table ----------
@@ -318,8 +384,10 @@ function renderLog() {
         : '<span class="pill pill-review">Review</span>';
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
+    const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
+
     tr.innerHTML = `
-      <td>${trackingLink(r.trackingNumber)}</td>
+      <td>${trackingLink(r.trackingNumber)}${multiBadge}</td>
       <td>${escapeHtml(r.shipDate || "—")}</td>
       <td>${escapeHtml(r.service || "—")}</td>
       <td>${destPill} ${escapeHtml(r.destCountry || "")}</td>
@@ -438,9 +506,10 @@ function renderExpenses() {
     for (const r of filtered) {
       const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
       const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
+      const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${trackingLink(r.trackingNumber)}</td>
+        <td>${trackingLink(r.trackingNumber)}${multiBadge}</td>
         <td>${escapeHtml(r.shipDate || "—")}</td>
         <td>${escapeHtml(r.project)}</td>
         <td>${escapeHtml(r.submittedBy || "—")}</td>

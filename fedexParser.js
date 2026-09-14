@@ -18,10 +18,9 @@ const MONTHS = {
 // Lines that are label metadata, never part of an address block.
 const METADATA_PREFIXES = ["SIGN:", "BILL ", "NO EEI", "CAD:", "ORIGIN ID:"];
 
-async function loadLabelPage(file) {
+async function loadLabelDoc(file) {
   const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-  return doc.getPage(1);
+  return pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
 }
 
 async function extractLabelLines(page) {
@@ -151,9 +150,14 @@ function parseLabelText(lines) {
   };
 
   // --- Tracking number: "#### #### ####" barcode caption ---
-  let m = /\b(\d{4}\s\d{4}\s\d{4})\b/.exec(text);
-  if (m) {
-    result.trackingNumber = m[1].replace(/\s/g, "");
+  // On an MPS piece page, "Mstr# #### #### ####" (the master's number)
+  // appears near the top, BEFORE this piece's own tracking number near
+  // the bottom -- so take the last match in the text, not the first,
+  // or a piece would incorrectly come back with its master's number.
+  // Harmless on every other label, which only ever has one such match.
+  const trackingMatches = [...text.matchAll(/\b(\d{4}\s\d{4}\s\d{4})\b/g)];
+  if (trackingMatches.length) {
+    result.trackingNumber = trackingMatches[trackingMatches.length - 1][1].replace(/\s/g, "");
   } else {
     result.warnings.push("trackingNumber not found");
   }
@@ -291,18 +295,119 @@ function parseLabelText(lines) {
   return result;
 }
 
-async function parseFedexLabel(file) {
-  const page = await loadLabelPage(file);
-  const lines = await extractLabelLines(page);
-  const parsed = parseLabelText(lines);
-  parsed.sourceFile = file.name;
-  try {
-    parsed.previewDataUrl = await renderLabelPreview(page);
-  } catch (err) {
-    // A rendering failure shouldn't block the parse itself -- the
-    // confirm screen just won't have a preview image for this one.
-    console.error("Label preview render failed:", err);
-    parsed.previewDataUrl = null;
+// FedEx's Multiple Piece Shipment (MPS) convention: page 1 of a
+// multi-piece shipment is marked "## MASTER ## " plus a standalone
+// "1 of N" line; the remaining pages are marked "MPS#" plus
+// "Mstr# <that same tracking number>" and their own "k of N" line. A
+// plain single-piece label has none of these markers at all.
+function detectPieceMeta(text) {
+  const isMaster = /##\s*MASTER\s*##/.test(text);
+  const posMatch = /(?:^|\n)[ \t]*(\d+)\s+of\s+(\d+)[ \t]*(?:\n|$)/.exec(text);
+  const position = posMatch ? parseInt(posMatch[1], 10) : null;
+  const total = posMatch ? parseInt(posMatch[2], 10) : null;
+  const mstrMatch = /Mstr#\s*(\d{4}\s\d{4}\s\d{4})/.exec(text);
+  const mstrRef = mstrMatch ? mstrMatch[1].replace(/\s/g, "") : null;
+  const hasPieceMarkers = isMaster || position !== null || mstrRef !== null || /\bMPS#/.test(text);
+  return { isMaster, position, total, mstrRef, hasPieceMarkers };
+}
+
+// Parses every page of the PDF, then groups pages into shipment records.
+// Most files are the simple case: one page, no MPS markers -> one group
+// with one piece, same as before. A true multi-piece shipment (several
+// pages all pointing at the same master tracking number) becomes one
+// group with several pieces. Pages that carry NO piece markers and
+// don't share a master are each their own independent shipment --
+// e.g. someone batch-downloading a handful of unrelated single-piece
+// labels into one PDF -- so those come back as separate groups too,
+// rather than being incorrectly merged into one record.
+async function parseFedexLabelFile(file) {
+  const doc = await loadLabelDoc(file);
+  const pageParses = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const lines = await extractLabelLines(page);
+    const text = lines.join("\n");
+    const parsed = parseLabelText(lines);
+    const pieceMeta = detectPieceMeta(text);
+    pageParses.push({ pageNumber: i, page, parsed, pieceMeta });
   }
-  return parsed;
+
+  // Pass 1: every master / standalone page starts its own group, keyed
+  // by its own tracking number.
+  const groups = new Map(); // key -> { referenceIndex, pieceIndices: [] }
+  pageParses.forEach((pp, idx) => {
+    const { isMaster, hasPieceMarkers } = pp.pieceMeta;
+    if (isMaster || !hasPieceMarkers) {
+      const key = pp.parsed.trackingNumber || `__no-tracking-${idx}`;
+      groups.set(key, { referenceIndex: idx, pieceIndices: [idx] });
+    }
+  });
+
+  // Pass 2: every subordinate piece attaches to its referenced master's
+  // group -- order-independent, so it doesn't matter whether the master
+  // page physically comes first in the file.
+  pageParses.forEach((pp, idx) => {
+    const { isMaster, hasPieceMarkers, mstrRef } = pp.pieceMeta;
+    if (isMaster || !hasPieceMarkers) return; // already handled in pass 1
+    const key = mstrRef || pp.parsed.trackingNumber || `__no-tracking-${idx}`;
+    if (groups.has(key)) {
+      groups.get(key).pieceIndices.push(idx);
+    } else {
+      // This piece's master page isn't in this PDF at all -- still
+      // group it (as its own shipment, best effort) rather than drop
+      // it, but flag it so the confirm screen shows why.
+      groups.set(key, { referenceIndex: idx, pieceIndices: [idx], missingMaster: true });
+    }
+  });
+
+  // Build one shipment record per group.
+  const records = [];
+  for (const { referenceIndex, pieceIndices, missingMaster } of groups.values()) {
+    const ref = pageParses[referenceIndex];
+    const pieces = pieceIndices
+      .slice()
+      .sort((a, b) => a - b)
+      .map((idx) => {
+        const pp = pageParses[idx];
+        return {
+          pageNumber: pp.pageNumber,
+          trackingNumber: pp.parsed.trackingNumber,
+          weight: pp.parsed.weight,
+          weightUnit: pp.parsed.weightUnit,
+        };
+      });
+
+    const record = { ...ref.parsed }; // shared fields come from the reference (master) page
+    record.warnings = [...ref.parsed.warnings]; // clone -- about to push onto it below
+    record.sourceFile = file.name;
+    record.isMultiPiece = pieces.length > 1;
+    record.pieceCount = pieces.length;
+    record.pieces = pieces;
+
+    const weighable = pieces.filter((p) => p.weight != null);
+    record.totalWeight = weighable.length ? weighable.reduce((sum, p) => sum + p.weight, 0) : null;
+    record.totalWeightUnit = weighable.length ? weighable[0].weightUnit : null;
+    const mixedUnits = new Set(weighable.map((p) => p.weightUnit)).size > 1;
+    if (mixedUnits) record.warnings.push("pieces show mixed weight units — total may not be meaningful");
+
+    if (missingMaster) {
+      record.warnings.push(
+        "this piece references a master label that isn't in this PDF — shared fields came from this piece itself, not a true master page"
+      );
+    }
+    if (record.warnings.length) record.parseStatus = "needsReview";
+
+    try {
+      record.previewDataUrl = await renderLabelPreview(ref.page);
+    } catch (err) {
+      console.error("Label preview render failed:", err);
+      record.previewDataUrl = null;
+    }
+
+    records.push(record);
+  }
+
+  // Stable order: by the reference page's position in the file.
+  records.sort((a, b) => a.pieces[0].pageNumber - b.pieces[0].pageNumber);
+  return records;
 }
