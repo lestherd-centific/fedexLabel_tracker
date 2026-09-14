@@ -222,6 +222,33 @@ button {
 .dropzone strong { color: var(--c-violet); }
 .dropzone input[type="file"] { display: none; }
 
+/* ---- Confirm screen: preview + fields side by side ---- */
+.confirm-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.confirm-preview {
+  flex: 0 0 260px;
+  position: sticky;
+  top: 16px;
+}
+.confirm-preview img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--hover-bg);
+}
+.confirm-fields {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 700px) {
+  .confirm-layout { flex-direction: column; }
+  .confirm-preview { position: static; flex-basis: auto; width: 100%; max-width: 260px; }
+}
+
 /* ---- Form ---- */
 .form-grid {
   display: grid;
@@ -299,6 +326,12 @@ table {
   border-collapse: collapse;
   font-size: 13.5px;
 }
+table a {
+  color: var(--c-violet);
+  text-decoration: none;
+  font-weight: 600;
+}
+table a:hover { text-decoration: underline; }
 th {
   text-align: left;
   color: var(--sub);

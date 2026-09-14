@@ -178,6 +178,15 @@ async function handleFile(file) {
 // ---------- Confirm form ----------
 function populateConfirmForm(parsed) {
   document.getElementById("sourceFileName").textContent = parsed.sourceFile;
+
+  const previewImg = document.getElementById("labelPreviewImg");
+  if (parsed.previewDataUrl) {
+    previewImg.src = parsed.previewDataUrl;
+    previewImg.hidden = false;
+  } else {
+    previewImg.src = "";
+    previewImg.hidden = true;
+  }
   document.getElementById("f_trackingNumber").value = parsed.trackingNumber || "";
   document.getElementById("f_shipDate").value = parsed.shipDate || "";
   document.getElementById("f_service").value = parsed.service || "";
@@ -310,7 +319,7 @@ function renderLog() {
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     tr.innerHTML = `
-      <td>${escapeHtml(r.trackingNumber || "—")}</td>
+      <td>${trackingLink(r.trackingNumber)}</td>
       <td>${escapeHtml(r.shipDate || "—")}</td>
       <td>${escapeHtml(r.service || "—")}</td>
       <td>${destPill} ${escapeHtml(r.destCountry || "")}</td>
@@ -431,7 +440,7 @@ function renderExpenses() {
       const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${escapeHtml(r.trackingNumber || "—")}</td>
+        <td>${trackingLink(r.trackingNumber)}</td>
         <td>${escapeHtml(r.shipDate || "—")}</td>
         <td>${escapeHtml(r.project)}</td>
         <td>${escapeHtml(r.submittedBy || "—")}</td>
@@ -447,6 +456,18 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+// Links straight to FedEx's own tracking page. Verified the "trknbr"
+// query param alone is enough for FedEx to attempt a real lookup (it
+// also accepts an extra "trkqual" param FedEx generates internally,
+// but that's not something we have or need). If a shipment's tracking
+// number ages out of FedEx's own retention window, this will land on
+// FedEx's "we can't find that tracking number" page rather than erroring.
+function trackingLink(trackingNumber) {
+  if (!trackingNumber) return "—";
+  const url = `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(trackingNumber)}`;
+  return `<a href="${url}" target="_blank" rel="noopener">${escapeHtml(trackingNumber)}</a>`;
 }
 
 renderLog();

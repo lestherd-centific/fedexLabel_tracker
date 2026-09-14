@@ -18,10 +18,13 @@ const MONTHS = {
 // Lines that are label metadata, never part of an address block.
 const METADATA_PREFIXES = ["SIGN:", "BILL ", "NO EEI", "CAD:", "ORIGIN ID:"];
 
-async function extractLabelLines(file) {
+async function loadLabelPage(file) {
   const buf = await file.arrayBuffer();
   const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-  const page = await doc.getPage(1);
+  return doc.getPage(1);
+}
+
+async function extractLabelLines(page) {
   const textContent = await page.getTextContent();
 
   const lines = [];
@@ -38,6 +41,23 @@ async function extractLabelLines(file) {
   if (cur.trim()) lines.push(cur.trim());
 
   return lines.filter((l) => l.length > 0);
+}
+
+// Renders the label to a PNG data URL so the confirm screen can show the
+// original next to the parsed fields -- targetWidth is a CSS-pixel width,
+// scaled by devicePixelRatio for a crisp image on high-DPI screens.
+async function renderLabelPreview(page, targetWidth = 340) {
+  const dpr = window.devicePixelRatio || 1;
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = (targetWidth * dpr) / baseViewport.width;
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL("image/png");
 }
 
 function parseShipDate(raw) {
@@ -272,8 +292,17 @@ function parseLabelText(lines) {
 }
 
 async function parseFedexLabel(file) {
-  const lines = await extractLabelLines(file);
+  const page = await loadLabelPage(file);
+  const lines = await extractLabelLines(page);
   const parsed = parseLabelText(lines);
   parsed.sourceFile = file.name;
+  try {
+    parsed.previewDataUrl = await renderLabelPreview(page);
+  } catch (err) {
+    // A rendering failure shouldn't block the parse itself -- the
+    // confirm screen just won't have a preview image for this one.
+    console.error("Label preview render failed:", err);
+    parsed.previewDataUrl = null;
+  }
   return parsed;
 }

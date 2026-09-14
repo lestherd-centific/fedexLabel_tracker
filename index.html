@@ -51,6 +51,14 @@
       <h2>Confirm shipment details</h2>
       <p class="card-sub">Auto-parsed from <span id="sourceFileName"></span> — check anything flagged below, then add the project and price.</p>
 
+      <div class="confirm-layout">
+        <div class="confirm-preview">
+          <p class="section-title">Label preview</p>
+          <img id="labelPreviewImg" alt="Parsed label preview" />
+        </div>
+
+        <div class="confirm-fields">
+
       <div id="warningsBanner" class="warning-banner" hidden>
         <strong>Needs a look:</strong>
         <ul id="warningsList"></ul>
@@ -143,6 +151,9 @@
       <div style="display:flex; gap:10px; margin-top:20px;">
         <button class="btn-primary" id="addToLogBtn" type="button" style="flex:0 0 auto; padding:10px 20px;">Add to session log</button>
         <button class="btn" id="discardBtn" type="button">Discard</button>
+      </div>
+
+        </div>
       </div>
     </div>
 
