@@ -330,9 +330,19 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
     alert("Pick a project before adding this to the log.");
     return;
   }
+  const trackingNumber = document.getElementById("f_trackingNumber").value.trim();
+
+  // No duplicate tracking numbers in the session log -- a re-drop of the
+  // same label (or the same PDF twice) shouldn't silently create a
+  // second row for the same shipment.
+  if (trackingNumber && sessionLog.some((r) => r.trackingNumber === trackingNumber)) {
+    alert(`Tracking # ${trackingNumber} is already in this session's log — not adding it again.`);
+    return;
+  }
+
   const priceRaw = document.getElementById("f_price").value;
   const record = {
-    trackingNumber: document.getElementById("f_trackingNumber").value,
+    trackingNumber,
     shipDate: document.getElementById("f_shipDate").value,
     service: document.getElementById("f_service").value,
     destCountry: document.getElementById("f_destCountry").value,
@@ -342,6 +352,8 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
     pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
     totalWeight: currentParsed.totalWeight,
     totalWeightUnit: currentParsed.totalWeightUnit,
+    reference: document.getElementById("f_reference").value || null,
+    invoicePoDept: document.getElementById("f_invPoDept").value || null,
     senderName: document.getElementById("f_senderName").value,
     senderAddress: document.getElementById("f_senderAddress").value,
     senderPhone: document.getElementById("f_senderPhone").value,
@@ -395,9 +407,34 @@ function renderLog() {
       <td>${escapeHtml(r.submittedBy || "—")}</td>
       <td>${priceStr}</td>
       <td>${statusPill}</td>
+      <td><button class="icon-btn log-delete-btn" type="button" data-idx="${sessionLog.indexOf(r)}" title="Delete this shipment from the log">🗑</button></td>
     `;
     body.appendChild(tr);
   }
+}
+
+// Delegated once on the (persistent) table body, not re-attached on every
+// renderLog() call -- otherwise repeated renders would stack duplicate
+// listeners on the same node.
+document.getElementById("logTableBody").addEventListener("click", (e) => {
+  const btn = e.target.closest(".log-delete-btn");
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.idx, 10);
+  requestDeleteLogEntry(idx);
+});
+
+// Deleting a session-log row is destructive (nothing is saved to Excel
+// yet in this phase, so there's no undo) -- requires two confirmations,
+// as requested, before it actually splices the row out.
+function requestDeleteLogEntry(idx) {
+  const r = sessionLog[idx];
+  if (!r) return;
+  const label = `${r.trackingNumber || "(no tracking #)"} — ${r.project || "no project"}`;
+  if (!confirm(`Delete this shipment from the session log?\n\n${label}`)) return;
+  if (!confirm(`Are you sure? This can't be undone — it isn't saved to Excel yet, so it'll be gone for good.\n\n${label}`)) return;
+  sessionLog.splice(idx, 1);
+  renderLog();
+  renderExpenses();
 }
 
 // ---------- Expenses by Project tab ----------

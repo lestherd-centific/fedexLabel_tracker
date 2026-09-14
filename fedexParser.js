@@ -45,11 +45,24 @@ async function extractLabelLines(page) {
 // Renders the label to a PNG data URL so the confirm screen can show the
 // original next to the parsed fields -- targetWidth is a CSS-pixel width,
 // scaled by devicePixelRatio for a crisp image on high-DPI screens.
+//
+// International labels carry a page /Rotate of 270 (confirmed against
+// real samples: US->AU, US->GB both had page.rotate === 270). Letting
+// pdf.js apply that automatically (the default when no `rotation` is
+// passed to getViewport -- it falls back to page.rotate) renders the
+// label upside down: verified empirically by rendering the same page
+// with PyMuPDF both ways -- honoring /Rotate=270 produced a portrait
+// image with every field inverted, while forcing rotation to 0 (i.e.
+// ignoring /Rotate entirely and using the page's raw, un-rotated
+// content box) produced the correct, upright, readable label -- a
+// landscape image, since that's genuinely the shape FedEx prints the
+// international sheet in before it's folded. Domestic labels have
+// /Rotate=0 already, so forcing rotation:0 is a no-op for them.
 async function renderLabelPreview(page, targetWidth = 340) {
   const dpr = window.devicePixelRatio || 1;
-  const baseViewport = page.getViewport({ scale: 1 });
+  const baseViewport = page.getViewport({ scale: 1, rotation: 0 });
   const scale = (targetWidth * dpr) / baseViewport.width;
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale, rotation: 0 });
 
   const canvas = document.createElement("canvas");
   canvas.width = viewport.width;
