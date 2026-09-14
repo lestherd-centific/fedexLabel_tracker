@@ -10,6 +10,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 const STORAGE_USER_KEY = "fedexTracker_currentUser";
 const STORAGE_THEME_KEY = "fedexTracker_theme";
 
+// Paste the Power Automate flow's "When an HTTP request is received"
+// trigger URL here once that flow is built (see the design spec, §18).
+// Left blank, every shipment just shows "Not connected" in the Sync
+// column instead of trying to reach anything -- the session log still
+// works exactly as before.
+const POWER_AUTOMATE_URL =
+  "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/0c11aa6f378d43329be14b5836aee79a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=l566c9iR8sVBEwGVbdWO1erfuf0U0uEeWabXfm6pjzw";
+
 let currentParsed = null;
 let currentUser = null;
 const sessionLog = [];
@@ -367,12 +375,76 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
     sourceFile: currentParsed.sourceFile,
     submittedBy: currentUser ? currentUser.name : null,
   };
+  record.syncStatus = POWER_AUTOMATE_URL ? "syncing" : "unconfigured";
+
   sessionLog.push(record);
   renderLog();
   renderExpenses();
 
+  // Fires in the background -- doesn't block moving on to the next
+  // queued shipment. syncRecordToExcel() updates record.syncStatus and
+  // re-renders the log itself once it knows the result.
+  if (POWER_AUTOMATE_URL) syncRecordToExcel(record);
+
   advanceQueue();
 });
+
+// ---------- Sync to Excel (Power Automate) ----------
+// Builds exactly the JSON body the flow's trigger expects -- the 25
+// Shipments columns minus `id`/`ts`, which the flow generates itself
+// (guid()/utcNow()) rather than trusting the browser's clock or a
+// client-generated id.
+function shipmentPayload(record) {
+  return {
+    trackingNumber: record.trackingNumber,
+    shipDate: record.shipDate,
+    service: record.service,
+    destCountry: record.destCountry,
+    isInternational: record.isInternational,
+    isMultiPiece: record.isMultiPiece,
+    pieceCount: record.pieceCount,
+    pieceTrackingNumbers: record.pieceTrackingNumbers,
+    totalWeight: record.totalWeight,
+    totalWeightUnit: record.totalWeightUnit,
+    reference: record.reference,
+    invoicePoDept: record.invoicePoDept,
+    senderName: record.senderName,
+    senderAddress: record.senderAddress,
+    senderPhone: record.senderPhone,
+    recipientName: record.recipientName,
+    recipientAddress: record.recipientAddress,
+    recipientPhone: record.recipientPhone,
+    project: record.project,
+    price: record.price,
+    notes: record.notes,
+    parseStatus: record.parseStatus,
+    sourceFile: record.sourceFile,
+    submittedBy: record.submittedBy,
+  };
+}
+
+async function syncRecordToExcel(record) {
+  if (!POWER_AUTOMATE_URL) {
+    record.syncStatus = "unconfigured";
+    renderLog();
+    return;
+  }
+  record.syncStatus = "syncing";
+  renderLog();
+  try {
+    const res = await fetch(POWER_AUTOMATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(shipmentPayload(record)),
+    });
+    if (!res.ok) throw new Error(`Flow responded ${res.status}`);
+    record.syncStatus = "synced";
+  } catch (err) {
+    console.error("Sync to Excel failed:", err);
+    record.syncStatus = "failed";
+  }
+  renderLog();
+}
 
 // ---------- Session log table ----------
 function renderLog() {
@@ -397,6 +469,8 @@ function renderLog() {
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
+    const idx = sessionLog.indexOf(r);
+    const syncCell = syncStatusCell(r.syncStatus, idx);
 
     tr.innerHTML = `
       <td>${trackingLink(r.trackingNumber)}${multiBadge}</td>
@@ -407,9 +481,29 @@ function renderLog() {
       <td>${escapeHtml(r.submittedBy || "—")}</td>
       <td>${priceStr}</td>
       <td>${statusPill}</td>
-      <td><button class="icon-btn log-delete-btn" type="button" data-idx="${sessionLog.indexOf(r)}" title="Delete this shipment from the log">🗑</button></td>
+      <td>${syncCell}</td>
+      <td><button class="icon-btn log-delete-btn" type="button" data-idx="${idx}" title="Delete this shipment from the log">🗑</button></td>
     `;
     body.appendChild(tr);
+  }
+}
+
+// The Sync column: what state this row's write to the Shipments tab is
+// in. "failed" also gets a retry link right in the pill, since a live
+// per-shipment sync with no way to nudge a failed write again would
+// leave it stuck there with no recourse but re-entering it by hand.
+function syncStatusCell(status, idx) {
+  switch (status) {
+    case "synced":
+      return '<span class="pill pill-ok">Synced</span>';
+    case "syncing":
+      return '<span class="pill pill-muted">Syncing…</span>';
+    case "failed":
+      return `<span class="pill pill-error">Failed</span> <button class="linklike-pill" type="button" data-retry-idx="${idx}">retry</button>`;
+    case "unconfigured":
+      return '<span class="pill pill-muted" title="No Power Automate flow URL configured yet">Not connected</span>';
+    default:
+      return "—";
   }
 }
 
@@ -417,10 +511,16 @@ function renderLog() {
 // renderLog() call -- otherwise repeated renders would stack duplicate
 // listeners on the same node.
 document.getElementById("logTableBody").addEventListener("click", (e) => {
-  const btn = e.target.closest(".log-delete-btn");
-  if (!btn) return;
-  const idx = parseInt(btn.dataset.idx, 10);
-  requestDeleteLogEntry(idx);
+  const deleteBtn = e.target.closest(".log-delete-btn");
+  if (deleteBtn) {
+    requestDeleteLogEntry(parseInt(deleteBtn.dataset.idx, 10));
+    return;
+  }
+  const retryBtn = e.target.closest("[data-retry-idx]");
+  if (retryBtn) {
+    const r = sessionLog[parseInt(retryBtn.dataset.retryIdx, 10)];
+    if (r) syncRecordToExcel(r);
+  }
 });
 
 // Deleting a session-log row is destructive (nothing is saved to Excel

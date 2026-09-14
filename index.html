@@ -17,7 +17,7 @@
     <div>
       <div class="kicker">Shipment Tracker</div>
       <h1>FedEx Shipment Cost Tracker</h1>
-      <p class="subtitle">Phase 1 — parsing &amp; entry only, this session. Not yet synced to Excel.</p>
+      <p class="subtitle">Confirmed shipments sync live to the shared Excel workbook via Power Automate.</p>
     </div>
     <div class="header-actions">
       <button class="icon-btn" id="darkToggle" type="button">🌙 Dark</button>
@@ -166,7 +166,7 @@
 
     <div class="card">
       <h2>This session's log</h2>
-      <p class="card-sub">Not saved anywhere yet — clears on refresh. Phase 2 wires this to the shared Excel workbook via Power Automate.</p>
+      <p class="card-sub">Each row syncs to the shared <code>Shipments</code> tab as soon as it's added — the "Sync" column shows whether that write went through. The table itself still clears on refresh; Excel is the durable copy.</p>
       <table>
         <thead>
           <tr>
@@ -178,6 +178,7 @@
             <th>Submitted by</th>
             <th>Price</th>
             <th>Status</th>
+            <th>Sync</th>
             <th></th>
           </tr>
         </thead>

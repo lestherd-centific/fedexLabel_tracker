@@ -309,6 +309,17 @@ button {
 .pill-intl { background: var(--c-pink-soft); color: var(--c-pink); }
 .pill-domestic { background: var(--st-instock-bg); color: var(--st-instock); }
 .pill-muted { background: var(--hover-bg); color: var(--sub); }
+.pill-error { background: var(--st-broken-bg); color: var(--st-broken); }
+
+.linklike-pill {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  color: inherit;
+}
 
 .warning-banner {
   background: var(--cond-fair-bg);
