@@ -1,8 +1,10 @@
-// FedEx Shipment Cost Tracker — phase 1 app logic.
-// No shipment data is persisted anywhere (by design, this phase) — the
-// session log is an in-memory array only and clears on refresh. Login
-// and dark-mode preference are the only things kept in localStorage,
-// as light per-viewer conveniences, not shipment data.
+// FedEx Shipment Cost Tracker — app logic.
+// Shipment history is backed by Excel (via the two Power Automate flows
+// below), not by this browser: `shipmentHistory` is loaded fresh from
+// the read flow on startup, refreshed again right before every add (for
+// an up-to-date duplicate check), and can be reloaded on demand with the
+// Refresh button. Login and dark-mode preference are the only things
+// kept in localStorage, as light per-viewer conveniences.
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -13,14 +15,22 @@ const STORAGE_THEME_KEY = "fedexTracker_theme";
 // Paste the Power Automate flow's "When an HTTP request is received"
 // trigger URL here once that flow is built (see the design spec, §18).
 // Left blank, every shipment just shows "Not connected" in the Sync
-// column instead of trying to reach anything -- the session log still
-// works exactly as before.
+// column instead of trying to reach anything.
 const POWER_AUTOMATE_URL =
   "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/0c11aa6f378d43329be14b5836aee79a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=l566c9iR8sVBEwGVbdWO1erfuf0U0uEeWabXfm6pjzw";
 
+// Paste the second (read-only) flow's "When an HTTP request is
+// received" URL here once it's built (see the design spec, §20). Left
+// blank, history just starts empty each load and duplicate-checking
+// falls back to whatever's already in memory this session.
+const POWER_AUTOMATE_READ_URL = "";
+
+const LOG_PAGE_SIZE = 10;
+let logPage = 0; // 0-indexed
+
 let currentParsed = null;
 let currentUser = null;
-const sessionLog = [];
+const shipmentHistory = []; // mutated in place (push/splice/length=0), never reassigned
 
 // A single PDF can now yield more than one shipment record: a true
 // multi-piece shipment stays one record (pieces bundled in), but a
@@ -331,7 +341,7 @@ document.getElementById("discardBtn").addEventListener("click", () => {
   advanceQueue();
 });
 
-document.getElementById("addToLogBtn").addEventListener("click", () => {
+document.getElementById("addToLogBtn").addEventListener("click", async () => {
   if (!currentParsed) return;
   const project = document.getElementById("f_project").value;
   if (!project) {
@@ -340,53 +350,68 @@ document.getElementById("addToLogBtn").addEventListener("click", () => {
   }
   const trackingNumber = document.getElementById("f_trackingNumber").value.trim();
 
-  // No duplicate tracking numbers in the session log -- a re-drop of the
-  // same label (or the same PDF twice) shouldn't silently create a
-  // second row for the same shipment.
-  if (trackingNumber && sessionLog.some((r) => r.trackingNumber === trackingNumber)) {
-    alert(`Tracking # ${trackingNumber} is already in this session's log — not adding it again.`);
-    return;
+  const addBtn = document.getElementById("addToLogBtn");
+  const originalLabel = addBtn.textContent;
+  addBtn.disabled = true;
+  addBtn.textContent = "Checking for duplicates…";
+  try {
+    // Refresh from Excel first (if the read flow's connected) so the
+    // duplicate check below is against what's actually in Shipments
+    // right now, not a stale local cache that could miss something a
+    // teammate added minutes ago on a different machine. Falls back to
+    // whatever's already loaded if the refresh itself fails, rather
+    // than blocking the add entirely on a network hiccup.
+    if (POWER_AUTOMATE_READ_URL) await refreshHistoryFromExcel({ silent: true });
+
+    if (trackingNumber && shipmentHistory.some((r) => r.trackingNumber === trackingNumber)) {
+      alert(`Tracking # ${trackingNumber} is already in the shipment history — not adding it again.`);
+      return;
+    }
+
+    const priceRaw = document.getElementById("f_price").value;
+    const record = {
+      trackingNumber,
+      shipDate: document.getElementById("f_shipDate").value,
+      service: document.getElementById("f_service").value,
+      destCountry: document.getElementById("f_destCountry").value,
+      isInternational: currentParsed.isInternational,
+      isMultiPiece: currentParsed.isMultiPiece,
+      pieceCount: currentParsed.pieceCount,
+      pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
+      totalWeight: currentParsed.totalWeight,
+      totalWeightUnit: currentParsed.totalWeightUnit,
+      reference: document.getElementById("f_reference").value || null,
+      invoicePoDept: document.getElementById("f_invPoDept").value || null,
+      senderName: document.getElementById("f_senderName").value,
+      senderAddress: document.getElementById("f_senderAddress").value,
+      senderPhone: document.getElementById("f_senderPhone").value,
+      recipientName: document.getElementById("f_recipientName").value,
+      recipientAddress: document.getElementById("f_recipientAddress").value,
+      recipientPhone: document.getElementById("f_recipientPhone").value,
+      project,
+      price: priceRaw ? parseFloat(priceRaw) : null,
+      notes: document.getElementById("f_notes").value,
+      parseStatus: currentParsed.parseStatus,
+      sourceFile: currentParsed.sourceFile,
+      submittedBy: currentUser ? currentUser.name : null,
+    };
+    record.syncStatus = POWER_AUTOMATE_URL ? "syncing" : "unconfigured";
+
+    shipmentHistory.push(record);
+    logPage = 0; // jump to the newest page so the just-added row is visible
+    renderLog();
+    renderExpenses();
+
+    // Fires in the background -- doesn't block moving on to the next
+    // queued shipment. syncRecordToExcel() updates record.syncStatus and
+    // re-renders the log itself once it knows the result.
+    if (POWER_AUTOMATE_URL) syncRecordToExcel(record);
+
+    advanceQueue();
+  } finally {
+    addBtn.disabled = false;
+    addBtn.textContent = originalLabel;
   }
-
-  const priceRaw = document.getElementById("f_price").value;
-  const record = {
-    trackingNumber,
-    shipDate: document.getElementById("f_shipDate").value,
-    service: document.getElementById("f_service").value,
-    destCountry: document.getElementById("f_destCountry").value,
-    isInternational: currentParsed.isInternational,
-    isMultiPiece: currentParsed.isMultiPiece,
-    pieceCount: currentParsed.pieceCount,
-    pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
-    totalWeight: currentParsed.totalWeight,
-    totalWeightUnit: currentParsed.totalWeightUnit,
-    reference: document.getElementById("f_reference").value || null,
-    invoicePoDept: document.getElementById("f_invPoDept").value || null,
-    senderName: document.getElementById("f_senderName").value,
-    senderAddress: document.getElementById("f_senderAddress").value,
-    senderPhone: document.getElementById("f_senderPhone").value,
-    recipientName: document.getElementById("f_recipientName").value,
-    recipientAddress: document.getElementById("f_recipientAddress").value,
-    recipientPhone: document.getElementById("f_recipientPhone").value,
-    project,
-    price: priceRaw ? parseFloat(priceRaw) : null,
-    notes: document.getElementById("f_notes").value,
-    parseStatus: currentParsed.parseStatus,
-    sourceFile: currentParsed.sourceFile,
-    submittedBy: currentUser ? currentUser.name : null,
-  };
-  record.syncStatus = POWER_AUTOMATE_URL ? "syncing" : "unconfigured";
-
-  sessionLog.push(record);
-  renderLog();
-  renderExpenses();
-
-  // Fires in the background -- doesn't block moving on to the next
-  // queued shipment. syncRecordToExcel() updates record.syncStatus and
-  // re-renders the log itself once it knows the result.
-  if (POWER_AUTOMATE_URL) syncRecordToExcel(record);
-
-  advanceQueue();
 });
 
 // ---------- Sync to Excel (Power Automate) ----------
@@ -446,19 +471,126 @@ async function syncRecordToExcel(record) {
   renderLog();
 }
 
+// ---------- History (read from Excel) ----------
+// Excel Online returns each row's fields matching the Shipments header
+// row, but cell formatting can make booleans/numbers come back as
+// strings (e.g. "TRUE" instead of true) -- normalize defensively so the
+// rest of the app can rely on real types regardless of how a cell
+// happens to be formatted in the workbook.
+function toBool(v) {
+  return v === true || v === "true" || v === "TRUE" || v === 1;
+}
+function toNumOrNull(v) {
+  if (v === "" || v === undefined || v === null) return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+function normalizeHistoryRow(row) {
+  return {
+    id: row.id,
+    ts: row.ts,
+    trackingNumber: row.trackingNumber || "",
+    shipDate: row.shipDate || "",
+    service: row.service || "",
+    destCountry: row.destCountry || "",
+    isInternational: toBool(row.isInternational),
+    isMultiPiece: toBool(row.isMultiPiece),
+    pieceCount: toNumOrNull(row.pieceCount) ?? 1,
+    pieceTrackingNumbers: row.pieceTrackingNumbers || null,
+    totalWeight: toNumOrNull(row.totalWeight),
+    totalWeightUnit: row.totalWeightUnit || null,
+    reference: row.reference || null,
+    invoicePoDept: row.invoicePoDept || null,
+    senderName: row.senderName || "",
+    senderAddress: row.senderAddress || "",
+    senderPhone: row.senderPhone || "",
+    recipientName: row.recipientName || "",
+    recipientAddress: row.recipientAddress || "",
+    recipientPhone: row.recipientPhone || "",
+    project: row.project || "",
+    price: toNumOrNull(row.price),
+    notes: row.notes || "",
+    parseStatus: row.parseStatus || "ok",
+    sourceFile: row.sourceFile || "",
+    submittedBy: row.submittedBy || null,
+    syncStatus: "synced", // it came from Excel, so it's already there by definition
+  };
+}
+
+// Calls the read flow and returns a normalized array, or throws. Callers
+// decide how to handle a failure (fall back to cache, show a message).
+async function fetchShipmentHistory() {
+  const res = await fetch(POWER_AUTOMATE_READ_URL);
+  if (!res.ok) throw new Error(`History flow responded ${res.status}`);
+  const rows = await res.json();
+  if (!Array.isArray(rows)) throw new Error("History flow didn't return an array");
+  return rows.map(normalizeHistoryRow);
+}
+
+const historyStatusNote = document.getElementById("historyStatusNote");
+
+// Replaces shipmentHistory's contents in place (never reassigns the
+// const) with a fresh pull from Excel. `silent` skips the "Loading…"
+// message for the pre-add duplicate-check call, so it doesn't flicker
+// the note on every click.
+async function refreshHistoryFromExcel({ silent = false } = {}) {
+  if (!POWER_AUTOMATE_READ_URL) {
+    if (historyStatusNote) {
+      historyStatusNote.textContent =
+        "History isn't connected to Excel yet — add POWER_AUTOMATE_READ_URL in app.js (see design spec §20).";
+    }
+    return false;
+  }
+  if (!silent && historyStatusNote) historyStatusNote.textContent = "Loading history from Excel…";
+  try {
+    const fresh = await fetchShipmentHistory();
+    shipmentHistory.length = 0;
+    shipmentHistory.push(...fresh);
+    if (historyStatusNote) {
+      historyStatusNote.textContent = `Synced with Excel as of ${new Date().toLocaleTimeString()}.`;
+    }
+    return true;
+  } catch (err) {
+    console.error("Loading history from Excel failed:", err);
+    if (historyStatusNote) {
+      historyStatusNote.textContent = "Couldn't load history from Excel just now — showing what's already loaded.";
+    }
+    return false;
+  }
+}
+
+document.getElementById("historyRefreshBtn").addEventListener("click", async () => {
+  await refreshHistoryFromExcel();
+  logPage = 0;
+  renderLog();
+  renderExpenses();
+});
+
 // ---------- Session log table ----------
 function renderLog() {
   const body = document.getElementById("logTableBody");
   const emptyRow = document.getElementById("logEmptyRow");
+  const pagination = document.getElementById("logPagination");
   body.innerHTML = "";
 
-  if (!sessionLog.length) {
+  if (!shipmentHistory.length) {
     emptyRow.hidden = false;
+    pagination.hidden = true;
     return;
   }
   emptyRow.hidden = true;
 
-  for (const r of sessionLog) {
+  // Most recent first. `ts` is an ISO timestamp (from Excel's utcNow(),
+  // or unset for a just-added row this session), so a plain string
+  // compare sorts correctly; unset ts sorts last within "just added".
+  const sorted = [...shipmentHistory].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+
+  const pageCount = Math.max(1, Math.ceil(sorted.length / LOG_PAGE_SIZE));
+  logPage = Math.min(logPage, pageCount - 1);
+  const pageRows = sorted.slice(logPage * LOG_PAGE_SIZE, logPage * LOG_PAGE_SIZE + LOG_PAGE_SIZE);
+
+  for (const r of pageRows) {
     const tr = document.createElement("tr");
 
     const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
@@ -469,7 +601,9 @@ function renderLog() {
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
-    const idx = sessionLog.indexOf(r);
+    // Index within the FULL (unsorted, unpaginated) array -- delete/retry
+    // splice/act on shipmentHistory itself, not the page-local slice.
+    const idx = shipmentHistory.indexOf(r);
     const syncCell = syncStatusCell(r.syncStatus, idx);
 
     tr.innerHTML = `
@@ -486,7 +620,21 @@ function renderLog() {
     `;
     body.appendChild(tr);
   }
+
+  pagination.hidden = pageCount <= 1;
+  document.getElementById("logPageInfo").textContent = `Page ${logPage + 1} of ${pageCount}`;
+  document.getElementById("logPrevPage").disabled = logPage === 0;
+  document.getElementById("logNextPage").disabled = logPage >= pageCount - 1;
 }
+
+document.getElementById("logPrevPage").addEventListener("click", () => {
+  logPage = Math.max(0, logPage - 1);
+  renderLog();
+});
+document.getElementById("logNextPage").addEventListener("click", () => {
+  logPage++;
+  renderLog();
+});
 
 // The Sync column: what state this row's write to the Shipments tab is
 // in. "failed" also gets a retry link right in the pill, since a live
@@ -518,21 +666,24 @@ document.getElementById("logTableBody").addEventListener("click", (e) => {
   }
   const retryBtn = e.target.closest("[data-retry-idx]");
   if (retryBtn) {
-    const r = sessionLog[parseInt(retryBtn.dataset.retryIdx, 10)];
+    const r = shipmentHistory[parseInt(retryBtn.dataset.retryIdx, 10)];
     if (r) syncRecordToExcel(r);
   }
 });
 
-// Deleting a session-log row is destructive (nothing is saved to Excel
-// yet in this phase, so there's no undo) -- requires two confirmations,
-// as requested, before it actually splices the row out.
+// Deleting a row here only removes it from this browser's in-memory
+// list -- it does NOT delete the row from Excel (there's no "delete"
+// flow, only add/read). Still requires two confirmations, since it's
+// easy to misread "removed from view" as "removed for good" otherwise;
+// a row synced from Excel will simply reappear on the next Refresh.
 function requestDeleteLogEntry(idx) {
-  const r = sessionLog[idx];
+  const r = shipmentHistory[idx];
   if (!r) return;
   const label = `${r.trackingNumber || "(no tracking #)"} — ${r.project || "no project"}`;
-  if (!confirm(`Delete this shipment from the session log?\n\n${label}`)) return;
-  if (!confirm(`Are you sure? This can't be undone — it isn't saved to Excel yet, so it'll be gone for good.\n\n${label}`)) return;
-  sessionLog.splice(idx, 1);
+  const excelNote = r.syncStatus === "synced" ? " (this won't delete the row from Excel — it'll come back on the next Refresh)" : "";
+  if (!confirm(`Remove this shipment from the list here?${excelNote}\n\n${label}`)) return;
+  if (!confirm(`Are you sure?${excelNote}\n\n${label}`)) return;
+  shipmentHistory.splice(idx, 1);
   renderLog();
   renderExpenses();
 }
@@ -576,7 +727,7 @@ function getFilteredLog() {
   const dateFrom = document.getElementById("exp_dateFrom").value;
   const dateTo = document.getElementById("exp_dateTo").value;
 
-  return sessionLog.filter((r) => {
+  return shipmentHistory.filter((r) => {
     if (project && r.project !== project) return false;
     if (submittedBy && r.submittedBy !== submittedBy) return false;
     if (destination === "domestic" && r.isInternational !== false) return false;
@@ -676,4 +827,11 @@ function trackingLink(trackingNumber) {
   return `<a href="${url}" target="_blank" rel="noopener">${escapeHtml(trackingNumber)}</a>`;
 }
 
-renderLog();
+// Initial load: pull real history from Excel (if the read flow's
+// connected) before the first render, so the table doesn't flash empty
+// and then repopulate a moment later.
+(async function initHistory() {
+  await refreshHistoryFromExcel();
+  renderLog();
+  renderExpenses();
+})();

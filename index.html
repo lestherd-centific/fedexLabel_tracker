@@ -165,8 +165,14 @@
     </div>
 
     <div class="card">
-      <h2>This session's log</h2>
-      <p class="card-sub">Each row syncs to the shared <code>Shipments</code> tab as soon as it's added — the "Sync" column shows whether that write went through. The table itself still clears on refresh; Excel is the durable copy.</p>
+      <div class="header-row" style="margin-bottom:4px;">
+        <div>
+          <h2 style="margin-bottom:2px;">Shipment history</h2>
+          <p class="card-sub" style="margin-bottom:0;">Loaded from the shared <code>Shipments</code> tab — new rows sync there right away (the "Sync" column shows whether that write went through), and duplicate tracking numbers are checked live against Excel, not just this browser.</p>
+        </div>
+        <button class="btn" id="historyRefreshBtn" type="button" style="flex:0 0 auto;">🔄 Refresh</button>
+      </div>
+      <p class="card-sub" id="historyStatusNote" style="margin-top:2px;"></p>
       <table>
         <thead>
           <tr>
@@ -184,7 +190,12 @@
         </thead>
         <tbody id="logTableBody"></tbody>
       </table>
-      <div class="empty-row" id="logEmptyRow">No shipments added yet this session.</div>
+      <div class="empty-row" id="logEmptyRow">No shipments yet.</div>
+      <div class="pagination" id="logPagination" hidden>
+        <button class="btn" id="logPrevPage" type="button">← Prev</button>
+        <span id="logPageInfo" class="hint"></span>
+        <button class="btn" id="logNextPage" type="button">Next →</button>
+      </div>
     </div>
 
     </section>
