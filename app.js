@@ -561,35 +561,65 @@ function toNumOrNull(v) {
   const n = Number(v);
   return isNaN(n) ? null : n;
 }
+// Excel can silently auto-detect a written string as a real Number
+// (e.g. a 12-digit tracking number -- shown as scientific notation in
+// Excel's own UI, which is just a display quirk, but the List rows API
+// hands back the actual number, not the original string). Force text
+// fields back to real strings so strict-equality checks elsewhere (the
+// duplicate-tracking-number check especially) can't silently fail
+// against a row Excel happened to convert.
+function toStr(v) {
+  return v === null || v === undefined ? "" : String(v);
+}
+function toStrOrNull(v) {
+  return v === null || v === undefined || v === "" ? null : String(v);
+}
+// Same idea, but for shipDate specifically: Excel can also auto-detect
+// a written ISO date string as a real Date-typed cell, in which case
+// the API hands back the column's raw date-serial number (e.g. 46261)
+// instead of the "2026-08-27" we originally wrote. Convert that serial
+// back into the same ISO format so it displays (and sorts/filters, in
+// the Expenses tab) the same regardless of which way Excel stored it.
+function excelSerialToISODate(serial) {
+  const ms = Date.UTC(1899, 11, 30) + Number(serial) * 86400000;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function normalizeShipDate(v) {
+  const s = toStr(v);
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (/^\d+(\.\d+)?$/.test(s)) return excelSerialToISODate(s);
+  return s;
+}
 
 function normalizeHistoryRow(row) {
   return {
     id: row.id,
     ts: row.ts,
-    trackingNumber: row.trackingNumber || "",
-    shipDate: row.shipDate || "",
-    service: row.service || "",
-    destCountry: row.destCountry || "",
+    trackingNumber: toStr(row.trackingNumber),
+    shipDate: normalizeShipDate(row.shipDate),
+    service: toStr(row.service),
+    destCountry: toStr(row.destCountry),
     isInternational: toBool(row.isInternational),
     isMultiPiece: toBool(row.isMultiPiece),
     pieceCount: toNumOrNull(row.pieceCount) ?? 1,
-    pieceTrackingNumbers: row.pieceTrackingNumbers || null,
+    pieceTrackingNumbers: toStrOrNull(row.pieceTrackingNumbers),
     totalWeight: toNumOrNull(row.totalWeight),
-    totalWeightUnit: row.totalWeightUnit || null,
-    reference: row.reference || null,
-    invoicePoDept: row.invoicePoDept || null,
-    senderName: row.senderName || "",
-    senderAddress: row.senderAddress || "",
-    senderPhone: row.senderPhone || "",
-    recipientName: row.recipientName || "",
-    recipientAddress: row.recipientAddress || "",
-    recipientPhone: row.recipientPhone || "",
-    project: row.project || "",
+    totalWeightUnit: toStrOrNull(row.totalWeightUnit),
+    reference: toStrOrNull(row.reference),
+    invoicePoDept: toStrOrNull(row.invoicePoDept),
+    senderName: toStr(row.senderName),
+    senderAddress: toStr(row.senderAddress),
+    senderPhone: toStr(row.senderPhone),
+    recipientName: toStr(row.recipientName),
+    recipientAddress: toStr(row.recipientAddress),
+    recipientPhone: toStr(row.recipientPhone),
+    project: toStr(row.project),
     price: toNumOrNull(row.price),
-    notes: row.notes || "",
+    notes: toStr(row.notes),
     parseStatus: row.parseStatus || "ok",
-    sourceFile: row.sourceFile || "",
-    submittedBy: row.submittedBy || null,
+    sourceFile: toStr(row.sourceFile),
+    submittedBy: toStrOrNull(row.submittedBy),
     syncStatus: "synced", // it came from Excel, so it's already there by definition
   };
 }
