@@ -23,7 +23,8 @@ const POWER_AUTOMATE_URL =
 // received" URL here once it's built (see the design spec, §20). Left
 // blank, history just starts empty each load and duplicate-checking
 // falls back to whatever's already in memory this session.
-const POWER_AUTOMATE_READ_URL = "";
+const POWER_AUTOMATE_READ_URL =
+  "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/10/workflows/a8681121066d4f16a53f81e25814a494/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=hvEQwuxmJXIsUIxOyAUlrnZKScGDwRR4baOGEX0eZGA";
 
 const LOG_PAGE_SIZE = 10;
 let logPage = 0; // 0-indexed
