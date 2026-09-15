@@ -26,6 +26,13 @@ const POWER_AUTOMATE_URL =
 const POWER_AUTOMATE_READ_URL =
   "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/10/workflows/a8681121066d4f16a53f81e25814a494/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=hvEQwuxmJXIsUIxOyAUlrnZKScGDwRR4baOGEX0eZGA";
 
+// Paste the third flow's URL here once it's built (see the design spec,
+// §21) -- a POST that permanently deletes a row from Shipments by its
+// `id`. Left blank, delete falls back to "remove from this view only"
+// for every row, even ones already synced to Excel.
+const POWER_AUTOMATE_DELETE_URL =
+  "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/14/workflows/ed7dcdb7f78a4ce2be55dd9624698b5c/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=R_ub5Kxx8OGXEvI_eKMNsq4Ntub1iIV6fTv9M9keDpk";
+
 const LOG_PAGE_SIZE = 10;
 let logPage = 0; // 0-indexed
 
@@ -62,6 +69,55 @@ document.getElementById("darkToggle").addEventListener("click", () => {
   applyTheme(next);
   localStorage.setItem(STORAGE_THEME_KEY, next);
 });
+
+// ---------- UI helpers: toast + confirm modal (replace alert()/confirm()) ----------
+// A themed, non-blocking notice in the bottom-right corner instead of the
+// browser's native alert() banner. Click it, or wait, and it's gone.
+function showToast(message, { type = "info", duration = 5000 } = {}) {
+  const container = document.getElementById("toastContainer");
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toast.title = "Click to dismiss";
+  toast.addEventListener("click", () => toast.remove());
+  container.appendChild(toast);
+  if (duration) setTimeout(() => toast.remove(), duration);
+}
+
+// A themed modal instead of the browser's native confirm() dialog.
+// Returns a Promise<boolean> -- true if Confirm was clicked, false for
+// Cancel, clicking outside the box, or pressing Escape.
+function showConfirm({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop confirm-modal";
+    backdrop.innerHTML = `
+      <div class="modal">
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(message)}</p>
+        <div class="modal-actions">
+          <button class="btn" data-action="cancel" type="button">${escapeHtml(cancelLabel)}</button>
+          <button class="${danger ? "btn-danger" : "btn-primary"}" data-action="confirm" type="button">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+    function close(result) {
+      backdrop.remove();
+      document.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    }
+    function onKeydown(e) {
+      if (e.key === "Escape") close(false);
+    }
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close(false); // clicked outside the modal box
+    });
+    backdrop.querySelector('[data-action="cancel"]').addEventListener("click", () => close(false));
+    backdrop.querySelector('[data-action="confirm"]').addEventListener("click", () => close(true));
+    document.addEventListener("keydown", onKeydown);
+    document.body.appendChild(backdrop);
+  });
+}
 
 // ---------- Login ----------
 function findCredential(login) {
@@ -182,7 +238,7 @@ fileInput.addEventListener("change", (e) => {
 
 async function handleFile(file) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-    alert("Please drop a PDF file — FedEx Ship Manager labels export as PDF.");
+    showToast("Please drop a PDF file — FedEx Ship Manager labels export as PDF.", { type: "error" });
     return;
   }
   dropzoneIdle.hidden = true;
@@ -190,7 +246,7 @@ async function handleFile(file) {
   try {
     const records = await parseFedexLabelFile(file);
     if (!records.length) {
-      alert("Couldn't find any FedEx label content in that PDF.");
+      showToast("Couldn't find any FedEx label content in that PDF.", { type: "error" });
       return;
     }
     parseQueue = records;
@@ -198,7 +254,7 @@ async function handleFile(file) {
     loadQueueItem();
   } catch (err) {
     console.error(err);
-    alert("Couldn't read that PDF. It may not be a FedEx Ship Manager label, or the file is corrupted.");
+    showToast("Couldn't read that PDF. It may not be a FedEx Ship Manager label, or the file is corrupted.", { type: "error" });
   } finally {
     dropzoneIdle.hidden = false;
     dropzoneBusy.hidden = true;
@@ -346,7 +402,7 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
   if (!currentParsed) return;
   const project = document.getElementById("f_project").value;
   if (!project) {
-    alert("Pick a project before adding this to the log.");
+    showToast("Pick a project before adding this to the log.", { type: "error" });
     return;
   }
   const trackingNumber = document.getElementById("f_trackingNumber").value.trim();
@@ -365,7 +421,7 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
     if (POWER_AUTOMATE_READ_URL) await refreshHistoryFromExcel({ silent: true });
 
     if (trackingNumber && shipmentHistory.some((r) => r.trackingNumber === trackingNumber)) {
-      alert(`Tracking # ${trackingNumber} is already in the shipment history — not adding it again.`);
+      showToast(`Tracking # ${trackingNumber} is already in the shipment history — not adding it again.`, { type: "error" });
       return;
     }
 
@@ -464,12 +520,31 @@ async function syncRecordToExcel(record) {
       body: JSON.stringify(shipmentPayload(record)),
     });
     if (!res.ok) throw new Error(`Flow responded ${res.status}`);
+    // The write flow's Response body now echoes back the row's
+    // Excel-generated `id` (see design spec §21) -- capturing it here
+    // means a row added THIS session can be permanently deleted right
+    // away, not just after the next history refresh re-pulls it.
+    const data = await res.json().catch(() => ({}));
+    if (data && data.id) record.id = data.id;
     record.syncStatus = "synced";
   } catch (err) {
     console.error("Sync to Excel failed:", err);
     record.syncStatus = "failed";
   }
   renderLog();
+}
+
+// Permanently deletes one row from Shipments by its Excel-generated
+// `id`. Throws on failure -- callers decide how to handle that (leave
+// the row in place rather than silently removing it locally when the
+// real delete didn't actually happen).
+async function deleteRecordFromExcel(record) {
+  const res = await fetch(POWER_AUTOMATE_DELETE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: record.id }),
+  });
+  if (!res.ok) throw new Error(`Delete flow responded ${res.status}`);
 }
 
 // ---------- History (read from Excel) ----------
@@ -672,21 +747,44 @@ document.getElementById("logTableBody").addEventListener("click", (e) => {
   }
 });
 
-// Deleting a row here only removes it from this browser's in-memory
-// list -- it does NOT delete the row from Excel (there's no "delete"
-// flow, only add/read). Still requires two confirmations, since it's
-// easy to misread "removed from view" as "removed for good" otherwise;
-// a row synced from Excel will simply reappear on the next Refresh.
-function requestDeleteLogEntry(idx) {
+// A row that's already synced to Excel (has a real `id`) AND has the
+// delete flow configured gets permanently deleted from Shipments, for
+// everyone, no undo. A row that hasn't synced yet (still syncing/failed/
+// unconfigured, no `id`) was never in Excel to begin with, so deleting
+// it here is just removing it from this list -- nothing to call out to.
+async function requestDeleteLogEntry(idx) {
   const r = shipmentHistory[idx];
   if (!r) return;
   const label = `${r.trackingNumber || "(no tracking #)"} — ${r.project || "no project"}`;
-  const excelNote = r.syncStatus === "synced" ? " (this won't delete the row from Excel — it'll come back on the next Refresh)" : "";
-  if (!confirm(`Remove this shipment from the list here?${excelNote}\n\n${label}`)) return;
-  if (!confirm(`Are you sure?${excelNote}\n\n${label}`)) return;
-  shipmentHistory.splice(idx, 1);
-  renderLog();
-  renderExpenses();
+  const canDeleteFromExcel = Boolean(r.id && POWER_AUTOMATE_DELETE_URL);
+
+  const confirmed = await showConfirm({
+    title: canDeleteFromExcel ? "Permanently delete this shipment?" : "Remove this shipment?",
+    message: canDeleteFromExcel
+      ? `This permanently deletes the row from the shared Shipments tab in Excel, for everyone. There's no undo.\n\n${label}`
+      : `This row hasn't finished syncing to Excel yet, so it'll just be removed from this list.\n\n${label}`,
+    confirmLabel: canDeleteFromExcel ? "Delete permanently" : "Remove",
+    danger: true,
+  });
+  if (!confirmed) return;
+
+  if (!canDeleteFromExcel) {
+    shipmentHistory.splice(idx, 1);
+    renderLog();
+    renderExpenses();
+    return;
+  }
+
+  try {
+    await deleteRecordFromExcel(r);
+    shipmentHistory.splice(idx, 1);
+    renderLog();
+    renderExpenses();
+    showToast("Shipment permanently deleted from Excel.", { type: "success" });
+  } catch (err) {
+    console.error("Delete from Excel failed:", err);
+    showToast("Couldn't delete that row from Excel — nothing was removed. Try again.", { type: "error" });
+  }
 }
 
 // ---------- Expenses by Project tab ----------

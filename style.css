@@ -193,6 +193,13 @@ button {
   cursor: not-allowed;
 }
 
+.btn-danger {
+  background: var(--st-broken);
+  border: 1px solid var(--st-broken);
+  color: #ffffff;
+}
+.btn-danger:hover { opacity: 0.92; }
+
 .icon-btn {
   border-radius: 7px;
   border: 1px solid var(--border);
@@ -407,6 +414,48 @@ tr:hover td { background: var(--hover-bg); }
 .modal .btn-primary { width: 100%; padding: 10px; font-size: 14px; }
 
 [hidden] { display: none !important; }
+
+/* ---- Toasts (replaces alert()) ---- */
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 360px;
+}
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--sub);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  color: var(--ink);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+  cursor: pointer;
+  animation: toast-in .18s ease-out;
+}
+.toast-info { border-left-color: var(--c-violet); }
+.toast-error { border-left-color: var(--st-broken); }
+.toast-success { border-left-color: var(--st-inuse); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Confirm modal (replaces confirm()) ---- */
+.confirm-modal .modal { max-width: 400px; }
+.confirm-modal .modal h2 { font-size: 16px; }
+.confirm-modal .modal p { color: var(--sub); font-size: 13.5px; line-height: 1.5; white-space: pre-line; }
+.confirm-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
 
 code {
   background: var(--hover-bg);
