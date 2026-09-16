@@ -116,26 +116,38 @@ h1 {
 .header-row {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   margin-bottom: 20px;
+}
+
+/* The title block flexes/shrinks so its own text wraps inside itself
+   (the subtitle can go to a second line) instead of the whole header
+   row wrapping and dropping .header-actions onto its own line below. */
+.header-title {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 0 0 auto;
   gap: 12px;
   font-size: 13px;
   color: var(--sub);
   white-space: nowrap;
   margin-top: 4px;
-  /* .header-row wraps on narrow screens -- without this, a flex item
-     that wraps onto its own line falls back to the LEFT edge (space-
-     between only spaces items sharing one line). margin-left: auto
-     keeps this block pinned to the right edge on its own line too. */
-  margin-left: auto;
+}
+
+/* Only on genuinely narrow screens does the header actually stack --
+   and even then, margin-left: auto keeps .header-actions pinned to the
+   right edge of its own line rather than falling back to the left. */
+@media (max-width: 560px) {
+  .header-row { flex-wrap: wrap; }
+  .header-actions { margin-left: auto; white-space: normal; }
 }
 
 .header-actions a, .header-actions button.linklike {
