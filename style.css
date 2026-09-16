@@ -125,11 +125,17 @@ h1 {
 .header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   font-size: 13px;
   color: var(--sub);
   white-space: nowrap;
   margin-top: 4px;
+  /* .header-row wraps on narrow screens -- without this, a flex item
+     that wraps onto its own line falls back to the LEFT edge (space-
+     between only spaces items sharing one line). margin-left: auto
+     keeps this block pinned to the right edge on its own line too. */
+  margin-left: auto;
 }
 
 .header-actions a, .header-actions button.linklike {
@@ -142,6 +148,37 @@ h1 {
   text-decoration: none;
 }
 .header-actions a:hover, .header-actions button.linklike:hover { text-decoration: underline; }
+
+/* Card-style link to a sibling app (matches how Hardware Management's
+   own site links back to this one: a bordered card with a small icon
+   box, not a plain text link). */
+.header-actions a.app-link-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+}
+.header-actions a.app-link-card:hover {
+  border-color: var(--c-violet);
+  background: var(--hover-bg);
+  text-decoration: none;
+}
+.app-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--note-bg);
+  font-size: 14px;
+}
 
 /* ---- Cards ---- */
 .card {
