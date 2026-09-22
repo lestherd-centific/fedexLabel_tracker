@@ -770,7 +770,9 @@ function normalizeHistoryRow(row) {
     project: toStr(row.project),
     price: toNumOrNull(row.price),
     notes: toStr(row.notes),
-    parseStatus: row.parseStatus || "ok",
+    // Anything other than "ok" (any case) -- e.g. "needsReview" -- shows as
+    // Review, so fixing a row in Excel just means typing ok here.
+    parseStatus: !toStr(row.parseStatus).trim() || toStr(row.parseStatus).trim().toLowerCase() === "ok" ? "ok" : "needsReview",
     sourceFile: toStr(row.sourceFile),
     submittedBy: toStrOrNull(row.submittedBy),
     syncStatus: "synced", // it came from Excel, so it's already there by definition
@@ -867,9 +869,7 @@ function renderLog() {
 
     const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
     const statusPill =
-      r.parseStatus === "ok"
-        ? '<span class="pill pill-ok">OK</span>'
-        : '<span class="pill pill-review">Review</span>';
+      r.parseStatus === "ok" ? '<span class="pill pill-ok">OK</span>' : reviewPill(r);
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
@@ -907,6 +907,53 @@ document.getElementById("logNextPage").addEventListener("click", () => {
   logPage++;
   renderLog();
 });
+
+// ---------- "Review" details (computed from the row, no flow needed) ----------
+// The reader's original warning list isn't saved to Excel, so this
+// works out what still needs detail from the row itself: blank fields
+// that the label should have filled, plus a guessed service. Each issue
+// names the exact Shipments column, so it can be fixed straight in
+// Excel. Some original reasons (mixed weight units, missing master
+// page) leave no trace in the row and can't be shown here.
+const REVIEW_FIELDS = [
+  ["trackingNumber", "Tracking number"],
+  ["shipDate", "Ship date"],
+  ["service", "Service"],
+  ["destCountry", "Destination country"],
+  ["totalWeight", "Weight"],
+  ["senderName", "Sender name"],
+  ["senderAddress", "Sender address"],
+  ["recipientName", "Recipient name"],
+  ["recipientAddress", "Recipient address"],
+];
+
+function isBlank(v) {
+  return v === null || v === undefined || (typeof v === "number" ? isNaN(v) : String(v).trim() === "");
+}
+
+function reviewIssues(r) {
+  const issues = [];
+  for (const [col, label] of REVIEW_FIELDS) {
+    if (isBlank(r[col])) issues.push(`${label} is blank (${col})`);
+  }
+  if (!isBlank(r.totalWeight) && isBlank(r.totalWeightUnit)) issues.push("Weight unit is blank (totalWeightUnit)");
+  if (r.isMultiPiece && isBlank(r.pieceTrackingNumbers)) {
+    issues.push("Multi-piece, but no piece tracking numbers (pieceTrackingNumbers)");
+  }
+  if (r.isInternational && r.service === "International Priority") {
+    issues.push("Service may have been guessed from the label's 'IP' code — confirm (service)");
+  }
+  return issues;
+}
+
+function reviewPill(r) {
+  const issues = reviewIssues(r);
+  const lines = issues.length
+    ? ["Needs detail:", ...issues.map((i) => `• ${i}`), "", "Fix in the Shipments tab, then set parseStatus to ok."]
+    : ["Flagged when added, but nothing looks blank now.", "Set parseStatus to ok in the Shipments tab to clear."];
+  const count = issues.length ? ` <span class="review-count">${issues.length}</span>` : "";
+  return `<span class="pill pill-review review-tip" tabindex="0" data-tip="${escapeAttr(lines.join("\n"))}" aria-label="${escapeAttr(lines.join(" "))}">Review${count}</span>`;
+}
 
 // The Sync column: what state this row's write to the Shipments tab is
 // in. "failed" also gets a retry link right in the pill, since a live
@@ -1097,6 +1144,16 @@ function renderExpenses() {
       detailBody.appendChild(tr);
     }
   }
+}
+
+// For attribute values: escapeHtml() doesn't escape quotes.
+function escapeAttr(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "&#10;");
 }
 
 function escapeHtml(str) {

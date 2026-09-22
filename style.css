@@ -571,3 +571,54 @@ footer.note {
   text-align: center;
   margin-top: 30px;
 }
+
+/* ---- Review pill: hover / focus / tap shows what needs detail ---- */
+.review-tip {
+  position: relative;
+  cursor: help;
+  outline: none;
+}
+.review-tip:focus-visible { box-shadow: 0 0 0 2px var(--cond-fair); }
+.review-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--cond-fair);
+  color: var(--panel);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.review-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: 300px;
+  white-space: pre-line;
+  text-align: left;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--cond-fair);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+.review-tip:hover::after,
+.review-tip:focus::after {
+  opacity: 1;
+  visibility: visible;
+}
