@@ -176,7 +176,7 @@ function parseLabelText(lines) {
   }
 
   // --- Ship date ---
-  m = /SHIP DATE:\s*(\d{2}[A-Z]{3}\d{2})/.exec(text);
+  let m = /SHIP DATE:\s*(\d{2}[A-Z]{3}\d{2})/.exec(text);
   if (m) {
     result.shipDateRaw = m[1];
     result.shipDate = parseShipDate(m[1]);

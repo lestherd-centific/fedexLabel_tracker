@@ -160,7 +160,7 @@
       </div>
 
       <div style="display:flex; gap:10px; margin-top:20px;">
-        <button class="btn-primary" id="addToLogBtn" type="button" style="flex:0 0 auto; padding:10px 20px;">Add to session log</button>
+        <button class="btn-primary" id="addToLogBtn" type="button" style="flex:0 0 auto; padding:10px 20px;">Add to log</button>
         <button class="btn" id="discardBtn" type="button">Discard</button>
       </div>
 
@@ -208,7 +208,7 @@
 
       <div class="card">
         <h2>Expenses by Project</h2>
-        <p class="card-sub">Reflects this session's log only, not the full Excel history yet — once Power Automate is wired up (phase 2), this reads the real <code>Shipments</code> tab instead.</p>
+        <p class="card-sub">Totals from the full shared <code>Shipments</code> tab in Excel, plus anything added this session that hasn't finished syncing.</p>
 
         <div class="filter-bar">
           <div class="field">
@@ -285,7 +285,7 @@
 
   </main>
 
-  <footer class="note">Shipment Cost Tracker · phase 1 prototype · matches the Hardware Management app's theme</footer>
+  <footer class="note">Shipment Cost Tracker · matches the Hardware Management app's theme</footer>
 </div>
 
 <!-- Login modal -->
@@ -305,7 +305,6 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="data.js"></script>
 <script src="fedexParser.js"></script>
 <script src="app.js"></script>
 </body>

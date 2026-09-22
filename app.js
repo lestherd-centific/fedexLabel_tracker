@@ -3,8 +3,11 @@
 // below), not by this browser: `shipmentHistory` is loaded fresh from
 // the read flow on startup, refreshed again right before every add (for
 // an up-to-date duplicate check), and can be reloaded on demand with the
-// Refresh button. Login and dark-mode preference are the only things
-// kept in localStorage, as light per-viewer conveniences.
+// Refresh button. Logins (Credentials tab) and the project list
+// (Projects tab) are also read live from Excel on every load -- see
+// EXCEL_LOOKUPS_URL below; data.js is no longer used. The remembered
+// login and dark-mode preference are the only things kept in
+// localStorage, as light per-viewer conveniences.
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -32,6 +35,23 @@ const POWER_AUTOMATE_READ_URL =
 // for every row, even ones already synced to Excel.
 const POWER_AUTOMATE_DELETE_URL =
   "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/14/workflows/ed7dcdb7f78a4ce2be55dd9624698b5c/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=R_ub5Kxx8OGXEvI_eKMNsq4Ntub1iIV6fTv9M9keDpk";
+
+// Read-only lookups: the Hardware Tracker's own "Load" flow (a GET on
+// the same shared workbook). Its response includes `credentials`
+// (name/login/role) and `projects` (name/archived) alongside other
+// tables this app ignores. Reused on purpose so there's no separate
+// flow to maintain -- but that means changes to the Hardware Tracker's
+// Load flow can affect login and projects here.
+const EXCEL_LOOKUPS_URL =
+  "https://default9b415834803a4da0afdcfe6b1d52d6.49.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d685d4ce87b14c37897baef1d30041eb/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=tqZieZYCMgpC5imEh0w2ObioFk9tXOiTHPB-3nYmGk0";
+
+// The Hardware Tracker's pseudo-project for unassigned stock -- not a
+// real project anyone ships against, so it's left out of the dropdowns.
+const HW_MASTER_PROJECT = "Master Inventory";
+
+// Filled from Excel by loadLookups(); empty until that returns.
+let CREDENTIALS = [];
+let PROJECTS = [];
 
 const LOG_PAGE_SIZE = 10;
 let logPage = 0; // 0-indexed
@@ -140,10 +160,58 @@ function showLogin() {
   document.getElementById("whoami").hidden = true;
 }
 
-function attemptLogin() {
+// ---------- Lookups (Credentials + Projects, live from Excel) ----------
+function applyLookups(data) {
+  CREDENTIALS = (data.credentials || [])
+    .filter((r) => r && r.login)
+    .map((r) => ({ name: toStr(r.name).trim(), login: toStr(r.login).trim(), role: toStr(r.role).trim() }));
+  PROJECTS = (data.projects || [])
+    .map((r) => ({ name: toStr(r && r.name).trim(), archived: toBool(r && r.archived) }))
+    .filter((p) => p.name && p.name !== HW_MASTER_PROJECT);
+  populateProjectDropdowns();
+}
+
+// Throws on failure. Never falls back to a hardcoded list -- Excel is
+// the only source of truth for who can log in.
+async function loadLookups() {
+  const res = await fetch(EXCEL_LOOKUPS_URL);
+  if (!res.ok) throw new Error(`Lookups flow responded ${res.status}`);
+  const data = await res.json();
+  if (!data || !Array.isArray(data.credentials)) throw new Error("Lookups flow returned no credentials");
+  applyLookups(data);
+}
+
+let lookupsLoaded = false;
+
+function setLoginBusy(busy, label) {
+  const btn = document.getElementById("loginBtn");
+  btn.disabled = busy;
+  btn.textContent = label || (busy ? "Loading logins from Excel…" : "Enter");
+}
+
+async function attemptLogin() {
   const input = document.getElementById("loginInput");
   const errorEl = document.getElementById("loginError");
-  const cred = findCredential(input.value);
+  let cred = lookupsLoaded ? findCredential(input.value) : null;
+
+  // Not found (or the first load failed): re-pull from Excel once, so a
+  // login added to the Credentials tab a minute ago works without
+  // reloading the page.
+  if (!cred) {
+    setLoginBusy(true, "Checking Excel…");
+    try {
+      await loadLookups();
+      lookupsLoaded = true;
+      cred = findCredential(input.value);
+    } catch (err) {
+      console.error("Loading logins from Excel failed:", err);
+      errorEl.textContent = "Couldn't reach Excel to check logins. Try again in a moment.";
+      setLoginBusy(false);
+      return;
+    }
+    setLoginBusy(false);
+  }
+
   if (!cred) {
     errorEl.textContent = "Login not recognized. Check the Credentials tab spelling.";
     return;
@@ -155,28 +223,40 @@ function attemptLogin() {
 
 document.getElementById("loginBtn").addEventListener("click", attemptLogin);
 document.getElementById("loginInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") attemptLogin();
+  if (e.key === "Enter" && !document.getElementById("loginBtn").disabled) attemptLogin();
 });
 document.getElementById("logoutBtn").addEventListener("click", () => {
   localStorage.removeItem(STORAGE_USER_KEY);
   showLogin();
 });
 
-(function initSession() {
-  const savedLogin = localStorage.getItem(STORAGE_USER_KEY);
-  if (savedLogin) {
-    const cred = findCredential(savedLogin);
-    if (cred) {
-      showApp(cred);
-      return;
-    }
-  }
+// On load: show the login modal in a "loading" state, pull Credentials
+// and Projects from Excel, then either restore the remembered login (if
+// it's still in the Credentials tab) or leave the modal up.
+(async function initSession() {
   showLogin();
+  setLoginBusy(true);
+  try {
+    await loadLookups();
+    lookupsLoaded = true;
+  } catch (err) {
+    console.error("Loading logins from Excel failed:", err);
+    document.getElementById("loginError").textContent =
+      "Couldn't load logins from Excel. Enter your login to try again.";
+  }
+  setLoginBusy(false);
+  if (!lookupsLoaded) return;
+
+  const savedLogin = localStorage.getItem(STORAGE_USER_KEY);
+  const cred = savedLogin ? findCredential(savedLogin) : null;
+  if (cred) showApp(cred);
+  else if (savedLogin) localStorage.removeItem(STORAGE_USER_KEY); // removed from Credentials
 })();
 
-// ---------- Project dropdown ----------
-(function populateProjects() {
+// ---------- Project dropdowns (log form + Expenses filters) ----------
+function populateProjectDropdowns() {
   const sel = document.getElementById("f_project");
+  const keep = sel.value;
   sel.innerHTML = '<option value="" disabled selected>Choose a project…</option>';
   for (const p of PROJECTS) {
     const opt = document.createElement("option");
@@ -184,7 +264,30 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
     opt.textContent = p.archived ? `${p.name} (archived)` : p.name;
     sel.appendChild(opt);
   }
-})();
+  if (keep && PROJECTS.some((p) => p.name === keep)) sel.value = keep;
+
+  const projectSel = document.getElementById("exp_project");
+  const keepExp = projectSel.value;
+  projectSel.innerHTML = '<option value="">All projects</option>';
+  for (const p of PROJECTS) {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.textContent = p.archived ? `${p.name} (archived)` : p.name;
+    projectSel.appendChild(opt);
+  }
+  projectSel.value = PROJECTS.some((p) => p.name === keepExp) ? keepExp : "";
+
+  const bySel = document.getElementById("exp_submittedBy");
+  const keepBy = bySel.value;
+  bySel.innerHTML = '<option value="">Everyone</option>';
+  for (const c of CREDENTIALS) {
+    const opt = document.createElement("option");
+    opt.value = c.name;
+    opt.textContent = c.name;
+    bySel.appendChild(opt);
+  }
+  bySel.value = CREDENTIALS.some((c) => c.name === keepBy) ? keepBy : "";
+}
 
 // ---------- Tabs ----------
 const tabBtnLog = document.getElementById("tabBtnLog");
@@ -420,8 +523,28 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
     // than blocking the add entirely on a network hiccup.
     if (POWER_AUTOMATE_READ_URL) await refreshHistoryFromExcel({ silent: true });
 
-    if (trackingNumber && shipmentHistory.some((r) => r.trackingNumber === trackingNumber)) {
-      showToast(`Tracking # ${trackingNumber} is already in the shipment history — not adding it again.`, { type: "error" });
+    // Check the master AND every piece number against every master and
+    // piece number already logged, so a piece of an existing multi-piece
+    // shipment can't slip in as a "new" shipment (or vice versa).
+    const pieceField = document.getElementById("f_pieceTrackingNumbers").value;
+    const incoming = [trackingNumber, ...splitTrackingList(pieceField)].filter(Boolean);
+    const existing = new Set();
+    for (const r of shipmentHistory) {
+      if (r.trackingNumber) existing.add(r.trackingNumber);
+      for (const t of splitTrackingList(r.pieceTrackingNumbers)) existing.add(t);
+    }
+    const dup = incoming.find((t) => existing.has(t));
+    if (dup) {
+      const which = dup === trackingNumber ? "Tracking #" : "Piece tracking #";
+      showToast(`${which} ${dup} is already in the shipment history — not adding it again.`, { type: "error" });
+      return;
+    }
+
+    // Weight: save what's in the (editable) field, not the parser's
+    // original value, so a corrected weight actually reaches Excel.
+    const weight = parseWeightField(document.getElementById("f_weight").value, currentParsed.totalWeightUnit);
+    if (weight === undefined) {
+      showToast('Weight should start with a number, e.g. "12.5 LB" — or clear it.', { type: "error" });
       return;
     }
 
@@ -435,8 +558,8 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
       isMultiPiece: currentParsed.isMultiPiece,
       pieceCount: currentParsed.pieceCount,
       pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
-      totalWeight: currentParsed.totalWeight,
-      totalWeightUnit: currentParsed.totalWeightUnit,
+      totalWeight: weight.value,
+      totalWeightUnit: weight.unit,
       reference: document.getElementById("f_reference").value || null,
       invoicePoDept: document.getElementById("f_invPoDept").value || null,
       senderName: document.getElementById("f_senderName").value,
@@ -451,6 +574,9 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
       parseStatus: currentParsed.parseStatus,
       sourceFile: currentParsed.sourceFile,
       submittedBy: currentUser ? currentUser.name : null,
+      // Local-only placeholder so the new row sorts to the top right
+      // away; replaced by the flow's own utcNow() on the next refresh.
+      ts: new Date().toISOString(),
     };
     record.syncStatus = POWER_AUTOMATE_URL ? "syncing" : "unconfigured";
 
@@ -471,9 +597,32 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
   }
 });
 
+// "877031039426, 877031039427" -> ["877031039426", "877031039427"].
+// Also strips inner spaces in case a number was typed as "8770 3103 9426".
+function splitTrackingList(v) {
+  if (v === null || v === undefined) return [];
+  return String(v)
+    .split(/[,;\n]+/)
+    .map((s) => s.replace(/\s+/g, ""))
+    .filter(Boolean);
+}
+
+// Reads the Weight field. Returns { value, unit } (both null when the
+// field is empty), or undefined when there's text but no leading number.
+// Accepts the multi-piece format too ("40 LB total (4 pieces: …)") --
+// only the leading number + unit are used.
+function parseWeightField(raw, fallbackUnit) {
+  const s = String(raw || "").trim();
+  if (!s) return { value: null, unit: null };
+  const m = /^([\d]+(?:\.\d+)?|\.\d+)\s*(LBS?|KGS?)?\b/i.exec(s);
+  if (!m) return undefined;
+  let unit = m[2] ? m[2].toUpperCase().replace(/S$/, "") : fallbackUnit || null;
+  return { value: parseFloat(m[1]), unit };
+}
+
 // ---------- Sync to Excel (Power Automate) ----------
-// Builds exactly the JSON body the flow's trigger expects -- the 25
-// Shipments columns minus `id`/`ts`, which the flow generates itself
+// Builds exactly the JSON body the flow's trigger expects -- 24 fields,
+// i.e. every Shipments column except `id`/`ts`, which the flow generates itself
 // (guid()/utcNow()) rather than trusting the browser's clock or a
 // client-generated id.
 function shipmentPayload(record) {
@@ -553,8 +702,12 @@ async function deleteRecordFromExcel(record) {
 // strings (e.g. "TRUE" instead of true) -- normalize defensively so the
 // rest of the app can rely on real types regardless of how a cell
 // happens to be formatted in the workbook.
+// Excel's List rows returns booleans as "True"/"False" (capitalized) --
+// compare case-insensitively so those aren't all read as false.
 function toBool(v) {
-  return v === true || v === "true" || v === "TRUE" || v === 1;
+  if (v === true || v === 1) return true;
+  if (typeof v === "string") return v.trim().toLowerCase() === "true" || v.trim() === "1";
+  return false;
 }
 function toNumOrNull(v) {
   if (v === "" || v === undefined || v === null) return null;
@@ -651,8 +804,21 @@ async function refreshHistoryFromExcel({ silent = false } = {}) {
   if (!silent && historyStatusNote) historyStatusNote.textContent = "Loading history from Excel…";
   try {
     const fresh = await fetchShipmentHistory();
+    // Keep rows added this session that aren't in Excel yet (still
+    // syncing, failed, or never configured) -- otherwise a refresh would
+    // silently drop them and take a failed row's retry link with them.
+    // Once one shows up in Excel (matched by id or tracking #), the
+    // Excel copy wins.
+    const freshIds = new Set(fresh.map((r) => r.id).filter(Boolean));
+    const freshTracking = new Set(fresh.map((r) => r.trackingNumber).filter(Boolean));
+    const pending = shipmentHistory.filter(
+      (r) =>
+        r.syncStatus !== "synced" &&
+        !(r.id && freshIds.has(r.id)) &&
+        !(r.trackingNumber && freshTracking.has(r.trackingNumber))
+    );
     shipmentHistory.length = 0;
-    shipmentHistory.push(...fresh);
+    shipmentHistory.push(...fresh, ...pending);
     if (historyStatusNote) {
       historyStatusNote.textContent = `Synced with Excel as of ${new Date().toLocaleTimeString()}.`;
     }
@@ -798,8 +964,17 @@ async function requestDeleteLogEntry(idx) {
   });
   if (!confirmed) return;
 
+  // Re-find the row now rather than trusting `idx`: a history refresh
+  // can run while the confirm dialog is open and reorder/replace the
+  // array, and splicing a stale index would remove the wrong row.
+  const removeLocally = () => {
+    let i = shipmentHistory.indexOf(r);
+    if (i === -1 && r.id) i = shipmentHistory.findIndex((x) => x.id === r.id);
+    if (i !== -1) shipmentHistory.splice(i, 1);
+  };
+
   if (!canDeleteFromExcel) {
-    shipmentHistory.splice(idx, 1);
+    removeLocally();
     renderLog();
     renderExpenses();
     return;
@@ -807,7 +982,7 @@ async function requestDeleteLogEntry(idx) {
 
   try {
     await deleteRecordFromExcel(r);
-    shipmentHistory.splice(idx, 1);
+    removeLocally();
     renderLog();
     renderExpenses();
     showToast("Shipment permanently deleted from Excel.", { type: "success" });
@@ -818,22 +993,8 @@ async function requestDeleteLogEntry(idx) {
 }
 
 // ---------- Expenses by Project tab ----------
-(function populateExpenseFilters() {
-  const projectSel = document.getElementById("exp_project");
-  for (const p of PROJECTS) {
-    const opt = document.createElement("option");
-    opt.value = p.name;
-    opt.textContent = p.archived ? `${p.name} (archived)` : p.name;
-    projectSel.appendChild(opt);
-  }
-  const bySel = document.getElementById("exp_submittedBy");
-  for (const c of CREDENTIALS) {
-    const opt = document.createElement("option");
-    opt.value = c.name;
-    opt.textContent = c.name;
-    bySel.appendChild(opt);
-  }
-})();
+// (Project / Submitted-by filter options are filled by
+// populateProjectDropdowns() once lookups load from Excel.)
 
 ["exp_project", "exp_submittedBy", "exp_destination", "exp_dateFrom", "exp_dateTo"].forEach((id) => {
   document.getElementById(id).addEventListener("input", renderExpenses);
