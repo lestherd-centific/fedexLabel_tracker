@@ -940,9 +940,6 @@ function reviewIssues(r) {
   if (r.isMultiPiece && isBlank(r.pieceTrackingNumbers)) {
     issues.push("Multi-piece, but no piece tracking numbers (pieceTrackingNumbers)");
   }
-  if (r.isInternational && r.service === "International Priority") {
-    issues.push("Service may have been guessed from the label's 'IP' code — confirm (service)");
-  }
   return issues;
 }
 
