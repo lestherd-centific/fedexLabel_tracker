@@ -366,6 +366,7 @@ async function handleFile(file) {
 }
 
 function loadQueueItem() {
+  closeLabelLightbox();
   currentParsed = parseQueue[queueIndex];
   populateConfirmForm(currentParsed);
 
@@ -398,12 +399,13 @@ function populateConfirmForm(parsed) {
   document.getElementById("sourceFileName").textContent = parsed.sourceFile;
 
   const previewImg = document.getElementById("labelPreviewImg");
+  const previewBtn = document.getElementById("labelPreviewBtn");
   if (parsed.previewDataUrl) {
     previewImg.src = parsed.previewDataUrl;
-    previewImg.hidden = false;
+    previewBtn.hidden = false;
   } else {
     previewImg.src = "";
-    previewImg.hidden = true;
+    previewBtn.hidden = true;
   }
   document.getElementById("f_trackingNumber").value = parsed.trackingNumber || "";
   document.getElementById("f_shipDate").value = parsed.shipDate || "";
@@ -496,6 +498,72 @@ function populateConfirmForm(parsed) {
   document.getElementById("confirmCard").hidden = false;
   document.getElementById("confirmCard").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// ---------- Label preview lightbox ----------
+// Click the small preview -> a large overlay. The label is re-rendered
+// from the PDF page at a size that fits the window (sharp, not a
+// stretched thumbnail); falls back to the thumbnail if that fails.
+// "Zoom in" shows it at 2x with scrolling for reading fine print.
+// Close with the button, Esc, or a click on the dark background.
+const lightbox = document.getElementById("labelLightbox");
+const lightboxImg = document.getElementById("labelLightboxImg");
+const lightboxStage = document.getElementById("labelLightboxStage");
+const lightboxZoomBtn = document.getElementById("labelLightboxZoom");
+const lightboxLoading = document.getElementById("labelLightboxLoading");
+const largePreviewCache = new WeakMap(); // parsed record -> data URL
+let lightboxReturnFocus = null;
+
+function setLightboxZoom(zoomed) {
+  lightboxStage.classList.toggle("zoomed", zoomed);
+  lightboxZoomBtn.textContent = zoomed ? "Fit to window" : "Zoom in";
+}
+
+async function openLabelLightbox() {
+  const parsed = currentParsed;
+  if (!parsed || !parsed.previewDataUrl) return;
+  lightboxReturnFocus = document.activeElement;
+  document.getElementById("labelLightboxTitle").textContent =
+    parsed.trackingNumber ? `Tracking # ${parsed.trackingNumber}` : parsed.sourceFile || "Label preview";
+  setLightboxZoom(false);
+  lightboxImg.src = largePreviewCache.get(parsed) || parsed.previewDataUrl;
+  lightbox.hidden = false;
+  document.body.classList.add("lightbox-open");
+  document.getElementById("labelLightboxClose").focus();
+
+  if (!largePreviewCache.has(parsed) && parsed.previewPage) {
+    lightboxLoading.hidden = false;
+    try {
+      // Wide enough for 2x zoom to stay crisp; capped so huge monitors
+      // don't produce an enormous image.
+      const width = Math.min(Math.max(window.innerWidth * 0.9, 900), 1600);
+      const url = await renderLabelPreview(parsed.previewPage, width);
+      largePreviewCache.set(parsed, url);
+      if (!lightbox.hidden && currentParsed === parsed) lightboxImg.src = url;
+    } catch (err) {
+      console.error("Large label render failed, keeping the thumbnail:", err);
+    } finally {
+      lightboxLoading.hidden = true;
+    }
+  }
+}
+
+function closeLabelLightbox() {
+  if (lightbox.hidden) return;
+  lightbox.hidden = true;
+  document.body.classList.remove("lightbox-open");
+  if (lightboxReturnFocus && lightboxReturnFocus.focus) lightboxReturnFocus.focus();
+}
+
+document.getElementById("labelPreviewBtn").addEventListener("click", openLabelLightbox);
+document.getElementById("labelLightboxClose").addEventListener("click", closeLabelLightbox);
+lightboxZoomBtn.addEventListener("click", () => setLightboxZoom(!lightboxStage.classList.contains("zoomed")));
+lightboxImg.addEventListener("click", () => setLightboxZoom(!lightboxStage.classList.contains("zoomed")));
+lightbox.addEventListener("click", (e) => {
+  if (e.target === lightbox || e.target === lightboxStage) closeLabelLightbox();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !lightbox.hidden) closeLabelLightbox();
+});
 
 document.getElementById("discardBtn").addEventListener("click", () => {
   advanceQueue();
