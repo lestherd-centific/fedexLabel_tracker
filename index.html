@@ -20,6 +20,10 @@
       <p class="subtitle">Confirmed shipments sync live to the shared Excel workbook via Power Automate.</p>
     </div>
     <div class="header-actions">
+      <a class="app-link-card" href="https://www.fedex.com/shippingplus/en-us/shipment/create" target="_blank" rel="noopener" title="Open FedEx Ship Manager to create a new shipment">
+        <span class="app-link-icon">📦</span>
+        <span>Create FedEx shipment</span>
+      </a>
       <a class="app-link-card" href="https://lestherd-centific.github.io/Hardware-Management/" target="_blank" rel="noopener">
         <span class="app-link-icon">🖥️</span>
         <span>Hardware Management</span>
@@ -59,7 +63,10 @@
       <div class="confirm-layout">
         <div class="confirm-preview">
           <p class="section-title">Label preview</p>
-          <img id="labelPreviewImg" alt="Parsed label preview" />
+          <button type="button" class="preview-zoom-btn" id="labelPreviewBtn" title="Click to enlarge" aria-label="Enlarge label preview">
+            <img id="labelPreviewImg" alt="Parsed label preview" />
+            <span class="preview-zoom-hint">🔍 Click to enlarge</span>
+          </button>
         </div>
 
         <div class="confirm-fields">
@@ -87,7 +94,29 @@
         </div>
         <div class="field">
           <label>Service <span class="pill" id="serviceConfidencePill" hidden></span></label>
-          <input type="text" id="f_service" />
+          <input type="text" id="f_service" list="serviceOptions" placeholder="Pick or type a service" />
+          <datalist id="serviceOptions">
+            <option value="FedEx 2Day"></option>
+            <option value="FedEx Priority Overnight"></option>
+            <option value="FedEx First Overnight"></option>
+            <option value="FedEx Standard Overnight"></option>
+            <option value="FedEx 2Day A.M."></option>
+            <option value="FedEx Express Saver"></option>
+            <option value="FedEx Ground"></option>
+            <option value="FedEx Home Delivery"></option>
+            <option value="FedEx 1Day Freight"></option>
+            <option value="FedEx First Overnight Freight"></option>
+            <option value="FedEx Freight Priority"></option>
+            <option value="FedEx Freight Economy"></option>
+            <option value="FedEx International Priority"></option>
+            <option value="FedEx International Priority Express"></option>
+            <option value="FedEx International First"></option>
+            <option value="FedEx International Economy"></option>
+            <option value="FedEx International Connect Plus"></option>
+            <option value="FedEx International Priority Freight"></option>
+            <option value="FedEx International Economy Freight"></option>
+            <option value="FedEx International Deferred Freight"></option>
+          </datalist>
         </div>
         <div class="field">
           <label>Destination <span class="pill" id="intlPill" hidden></span></label>
@@ -298,6 +327,19 @@
     </div>
     <div class="error" id="loginError"></div>
     <button class="btn-primary" id="loginBtn" type="button">Enter</button>
+  </div>
+</div>
+
+<!-- Label preview lightbox (click the preview on the confirm screen) -->
+<div class="lightbox-backdrop" id="labelLightbox" hidden role="dialog" aria-modal="true" aria-label="Label preview, enlarged">
+  <div class="lightbox-bar">
+    <span class="lightbox-title" id="labelLightboxTitle"></span>
+    <button type="button" class="btn" id="labelLightboxZoom">Zoom in</button>
+    <button type="button" class="btn" id="labelLightboxClose" aria-label="Close">✕ Close</button>
+  </div>
+  <div class="lightbox-stage" id="labelLightboxStage">
+    <img id="labelLightboxImg" alt="Label preview, enlarged" />
+    <div class="lightbox-loading" id="labelLightboxLoading" hidden>Rendering…</div>
   </div>
 </div>
 

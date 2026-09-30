@@ -46,8 +46,10 @@ async function extractLabelLines(page) {
 // original next to the parsed fields -- targetWidth is a CSS-pixel width,
 // scaled by devicePixelRatio for a crisp image on high-DPI screens.
 //
-// International labels carry a page /Rotate of 270 (confirmed against
-// real samples: US->AU, US->GB both had page.rotate === 270). Letting
+// Labels printed with the other team's settings (policy/terms block on
+// top) carry a page /Rotate of 270 -- first seen on international
+// samples (US->AU, US->GB), but it's a print setting, not an
+// international trait, so any label can have it. Letting
 // pdf.js apply that automatically (the default when no `rotation` is
 // passed to getViewport -- it falls back to page.rotate) renders the
 // label upside down: verified empirically by rendering the same page
@@ -56,8 +58,9 @@ async function extractLabelLines(page) {
 // ignoring /Rotate entirely and using the page's raw, un-rotated
 // content box) produced the correct, upright, readable label -- a
 // landscape image, since that's genuinely the shape FedEx prints the
-// international sheet in before it's folded. Domestic labels have
-// /Rotate=0 already, so forcing rotation:0 is a no-op for them.
+// sheet in before it's folded. Labels without those settings have
+// /Rotate=0 already, so forcing rotation:0 is a no-op for them --
+// either way the preview comes out upright, domestic or international.
 async function renderLabelPreview(page, targetWidth = 340) {
   const dpr = window.devicePixelRatio || 1;
   const baseViewport = page.getViewport({ scale: 1, rotation: 0 });
@@ -133,6 +136,52 @@ function decomposeBlock(block) {
     rest = rest.slice(0, -1);
   }
   return { name, address: rest.length ? rest.join(", ") : null, phone };
+}
+
+// The team's FedEx Ship Manager service list (plus a few common ones),
+// as printed on labels -> the name saved to Excel. Checked in order, so
+// the more specific names (e.g. "... Freight", "... Express") come
+// before the shorter ones they contain. Matching is on whole words with
+// flexible spacing ("2 DAY" / "2DAY", "INTL" / "INTERNATIONAL").
+const INTL = "INT(?:ERNATIONA)?'?L\\.?";
+const KNOWN_SERVICES = [
+  [`${INTL}\\s*PRIORITY\\s*EXPRESS`, "FedEx International Priority Express"],
+  [`${INTL}\\s*PRIORITY\\s*FREIGHT`, "FedEx International Priority Freight"],
+  [`${INTL}\\s*ECONOMY\\s*FREIGHT`, "FedEx International Economy Freight"],
+  [`${INTL}\\s*DEFERRED\\s*FREIGHT`, "FedEx International Deferred Freight"],
+  [`${INTL}\\s*CONNECT\\s*PLUS`, "FedEx International Connect Plus"],
+  [`${INTL}\\s*FIRST`, "FedEx International First"],
+  [`${INTL}\\s*PRIORITY`, "FedEx International Priority"],
+  [`${INTL}\\s*ECONOMY`, "FedEx International Economy"],
+  ["FIRST\\s*OVERNIGHT\\s*FREIGHT", "FedEx First Overnight Freight"],
+  ["FIRST\\s*OVERNIGHT", "FedEx First Overnight"],
+  ["PRIORITY\\s*OVERNIGHT", "FedEx Priority Overnight"],
+  ["STANDARD\\s*OVERNIGHT", "FedEx Standard Overnight"],
+  ["1\\s*DAY\\s*FREIGHT", "FedEx 1Day Freight"],
+  ["FREIGHT\\s*PRIORITY", "FedEx Freight Priority"],
+  ["FREIGHT\\s*ECONOMY", "FedEx Freight Economy"],
+  ["2\\s*DAY\\s*A\\.?M\\.?", "FedEx 2Day A.M."],
+  ["2\\s*DAY", "FedEx 2Day"],
+  ["EXPRESS\\s*SAVER", "FedEx Express Saver"],
+  ["HOME\\s*DELIVERY", "FedEx Home Delivery"],
+  // "GROUND" alone could be an address ("GROUND FLOOR"), so only
+  // "FEDEX GROUND" or a line that is just "GROUND" counts.
+  ["FEDEX\\s*GROUND|^\\s*GROUND\\s*$", "FedEx Ground"],
+].map(([re, name]) => [new RegExp(`(?:^|[^A-Z0-9])(?:${re})(?![A-Z0-9])`, "im"), name]);
+
+// Only short, headline-style lines are searched: the policy / terms
+// panel some labels carry can mention service names in its fine print,
+// and those long sentences mustn't be read as this label's service.
+const MAX_SERVICE_LINE_LEN = 60;
+
+function matchKnownService(lines) {
+  const upper = lines
+    .filter((l) => l.length <= MAX_SERVICE_LINE_LEN)
+    .join("\n")
+    .toUpperCase()
+    .replace(/®/g, "");
+  for (const [re, name] of KNOWN_SERVICES) if (re.test(upper)) return name;
+  return null;
 }
 
 function parseLabelText(lines) {
@@ -218,33 +267,53 @@ function parseLabelText(lines) {
   m = /\b(BILL (?:SENDER|RECIPIENT|THIRD PARTY))\b/.exec(text);
   if (m) result.billTo = m[1];
 
-  // --- International vs domestic: "XX-YY" destination sort code ---
+  // --- International vs domestic ---
+  // Two independent signals; either one makes a shipment international:
+  //   1. the "IP" (International Priority) service code on the label, and
+  //   2. an "XX-YY" destination sort code whose country isn't US.
+  // Neither depends on the page layout: the rotated sheet with the
+  // policy/terms block on top comes from the other team's print
+  // settings and can appear on ANY label, domestic or international,
+  // so it's never used as a signal here.
+  const hasIpCode = /\bIP\b/.test(text);
   const countryMatches = [...text.matchAll(/\b[A-Z]{2}-([A-Z]{2})\b/g)];
   if (countryMatches.length) {
     result.destCountry = countryMatches[countryMatches.length - 1][1];
-    result.isInternational = result.destCountry !== "US";
   } else {
     result.warnings.push("destCountry not found (sort code pattern missing)");
   }
+  if (hasIpCode || (result.destCountry && result.destCountry !== "US")) {
+    result.isInternational = true;
+  } else if (result.destCountry === "US") {
+    result.isInternational = false;
+  } // else: no sort code and no IP -- unknown, left null (pill hidden)
 
   // --- Service type ---
+  // 1. A known FedEx service name printed anywhere on the label (e.g.
+  //    "PRIORITY OVERNIGHT", "2DAY"), normalized to the team's Ship
+  //    Manager name ("FedEx Priority Overnight", "FedEx 2Day").
+  // 2. Otherwise, whatever is printed between "** … **" as-is.
+  // 3. Otherwise, the "IP" code -> FedEx International Priority. That code
+  //    is the real indicator, so all three are confident reads.
+  const known = matchKnownService(lines);
   m = /\*\*\s*(.+?)\s*\*\*/.exec(text);
-  if (m) {
+  if (known) {
+    result.service = known;
+    result.serviceConfidence = "labeled";
+  } else if (m) {
     result.service = m[1].trim();
     result.serviceConfidence = "labeled";
-  } else if (/\bIP\b/.test(text)) {
-    // Seen on real international samples (US->AU, US->GB), always paired
-    // with a short delivery-commitment code (EOD/EXP). Not a documented
-    // field label -- an inference, flagged for confirmation, not a
-    // certain read.
-    result.service = "International Priority";
-    result.serviceConfidence = "inferred from 'IP' code — confirm";
-    result.warnings.push(
-      "service type inferred from 'IP' code, not directly labeled — confirm before saving"
-    );
+  } else if (hasIpCode) {
+    result.service = "FedEx International Priority";
+    result.serviceConfidence = "labeled";
   } else {
     result.serviceConfidence = null;
     result.warnings.push("service type not confidently parsed — enter manually");
+  }
+  // Any FedEx International service also makes the shipment international.
+  if (result.service && /^FedEx International\b/.test(result.service)) result.isInternational = true;
+  if (result.isInternational && result.destCountry === "US") {
+    result.warnings.push("label shows an international service but a US destination — check destination");
   }
 
   // --- Address blocks (best effort) ---
@@ -341,6 +410,11 @@ async function parseFedexLabelFile(file) {
     const lines = await extractLabelLines(page);
     const text = lines.join("\n");
     const parsed = parseLabelText(lines);
+    // Skip pages that aren't a label at all (e.g. a policy / terms or
+    // folding-instructions page printed alongside it): no tracking
+    // number, ship date or weight found anywhere on the page. Without
+    // this, such a page would come back as its own bogus "shipment".
+    if (!parsed.trackingNumber && !parsed.shipDate && parsed.weight == null) continue;
     const pieceMeta = detectPieceMeta(text);
     pageParses.push({ pageNumber: i, page, parsed, pieceMeta });
   }
@@ -412,6 +486,10 @@ async function parseFedexLabelFile(file) {
 
     try {
       record.previewDataUrl = await renderLabelPreview(ref.page);
+      // Kept so the confirm screen can re-render the label much larger
+      // (the "click to enlarge" view) instead of blowing up the small
+      // thumbnail. Only used in the browser; never sent to Excel.
+      record.previewPage = ref.page;
     } catch (err) {
       console.error("Label preview render failed:", err);
       record.previewDataUrl = null;
