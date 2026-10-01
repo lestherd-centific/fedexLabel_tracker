@@ -1005,7 +1005,9 @@ function renderLog() {
 
     const destPill = scopePill(r);
     const statusPill =
-      r.parseStatus === "ok" ? '<span class="pill pill-ok">OK</span>' : reviewPill(r);
+      r.parseStatus === "ok" && !trackingLooksDamaged(r.trackingNumber)
+        ? '<span class="pill pill-ok">OK</span>'
+        : reviewPill(r);
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
@@ -1067,8 +1069,20 @@ function isBlank(v) {
   return v === null || v === undefined || (typeof v === "number" ? isNaN(v) : String(v).trim() === "");
 }
 
+// Excel keeps only 15 significant digits for numbers, so a long tracking
+// number (e.g. Australia Post's 23 digits) written into a General-format
+// cell comes back rounded -- "9.97230377603010E+22" -- and the real digits
+// are gone. Spot that so the row gets flagged for a re-type in Excel.
+function trackingLooksDamaged(v) {
+  const s = String(v || "").trim();
+  return /^\d(?:\.\d+)?e\+\d+$/i.test(s);
+}
+
 function reviewIssues(r) {
   const issues = [];
+  if (trackingLooksDamaged(r.trackingNumber)) {
+    issues.push("Tracking number was rounded by Excel (too long for a number cell) — retype it as text (trackingNumber)");
+  }
   for (const [col, label] of REVIEW_FIELDS) {
     if (isBlank(r[col])) issues.push(`${label} is blank (${col})`);
   }
@@ -1337,6 +1351,9 @@ function scopePill(r) {
 
 function trackingLink(trackingNumber, carrier) {
   if (!trackingNumber) return "—";
+  if (trackingLooksDamaged(trackingNumber)) {
+    return `<span class="tracking-damaged" title="Rounded by Excel — retype it as text in the Shipments tab">${escapeHtml(trackingNumber)}</span>${carrier ? `<div class="carrier-note">${escapeHtml(carrier)}</div>` : ""}`;
+  }
   // Only FedEx numbers get a link (to FedEx's tracker). Another carrier's
   // number shown as plain text, with the carrier named underneath.
   if (carrier && !/^fedex$/i.test(String(carrier).trim())) {
