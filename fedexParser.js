@@ -61,18 +61,69 @@ async function extractLabelLines(page) {
 // sheet in before it's folded. Labels without those settings have
 // /Rotate=0 already, so forcing rotation:0 is a no-op for them --
 // either way the preview comes out upright, domestic or international.
-async function renderLabelPreview(page, targetWidth = 340) {
+async function renderLabelPreview(page, targetWidth = 340, { trim = false } = {}) {
   const dpr = window.devicePixelRatio || 1;
   const baseViewport = page.getViewport({ scale: 1, rotation: 0 });
-  const scale = (targetWidth * dpr) / baseViewport.width;
+  // trim: crop to the printed content (used for manual entries, whose
+  // labels -- e.g. Australia Post on A4 -- can fill only a corner of
+  // the page). Box is in fractions of the page, found once per page.
+  const box = trim ? await findContentBox(page) : { x: 0, y: 0, w: 1, h: 1 };
+  const scale = (targetWidth * dpr) / (baseViewport.width * box.w);
   const viewport = page.getViewport({ scale, rotation: 0 });
 
   const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  canvas.width = Math.round(viewport.width * box.w);
+  canvas.height = Math.round(viewport.height * box.h);
   const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(-viewport.width * box.x, -viewport.height * box.y);
   await page.render({ canvasContext: ctx, viewport }).promise;
   return canvas.toDataURL("image/png");
+}
+
+// Finds the bounding box of anything non-white on the page from a quick
+// low-res render, with a little padding. Falls back to the full page if
+// the page is blank or the content already fills most of it.
+async function findContentBox(page) {
+  if (page._contentBox) return page._contentBox;
+  const full = { x: 0, y: 0, w: 1, h: 1 };
+  try {
+    const base = page.getViewport({ scale: 1, rotation: 0 });
+    const viewport = page.getViewport({ scale: 400 / base.width, rotation: 0 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        if (data[i] < 235 || data[i + 1] < 235 || data[i + 2] < 235) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    let box = full;
+    if (maxX >= 0) {
+      const pad = 0.02;
+      const x = Math.max(0, minX / width - pad), y = Math.max(0, minY / height - pad);
+      const w = Math.min(1, (maxX + 1) / width + pad) - x, h = Math.min(1, (maxY + 1) / height + pad) - y;
+      if (w * h < 0.85) box = { x, y, w, h };
+    }
+    page._contentBox = box;
+    return box;
+  } catch (err) {
+    console.error("Couldn't find the label's content area; showing the full page:", err);
+    return full;
+  }
 }
 
 function parseShipDate(raw) {
@@ -465,6 +516,8 @@ async function parseFedexLabelFile(file) {
       });
 
     const record = { ...ref.parsed }; // shared fields come from the reference (master) page
+    record.carrier = "FedEx";
+    record.isManual = false;
     record.warnings = [...ref.parsed.warnings]; // clone -- about to push onto it below
     record.sourceFile = file.name;
     record.isMultiPiece = pieces.length > 1;
@@ -501,4 +554,36 @@ async function parseFedexLabelFile(file) {
   // Stable order: by the reference page's position in the file.
   records.sort((a, b) => a.pieces[0].pageNumber - b.pieces[0].pageNumber);
   return records;
+}
+
+// For a PDF the parser can't read (e.g. another carrier's label): a blank
+// record for manual entry that still carries page 1's preview, so the
+// label stays visible on the left (and can be enlarged) while the user
+// types the details in.
+async function buildManualRecord(file) {
+  const doc = await loadLabelDoc(file);
+  const page = await doc.getPage(1);
+  let previewDataUrl = null;
+  try {
+    previewDataUrl = await renderLabelPreview(page, 340, { trim: true });
+  } catch (err) {
+    console.error("Label preview render failed:", err);
+  }
+  return {
+    isManual: true,
+    previewTrim: true,
+    carrier: "",
+    sourceFile: file.name,
+    previewDataUrl,
+    previewPage: previewDataUrl ? page : null,
+    trackingNumber: null, shipDate: null, service: null, serviceConfidence: "labeled",
+    destCountry: null, isInternational: null,
+    weight: null, weightUnit: null, totalWeight: null, totalWeightUnit: null, dimensions: null,
+    isMultiPiece: false, pieceCount: 1, pieces: [],
+    reference: null, invoice: null, po: null, dept: null,
+    sender: { name: null, address: null, phone: null },
+    recipient: { name: null, address: null, phone: null },
+    parseStatus: "ok",
+    warnings: [],
+  };
 }

@@ -44,7 +44,7 @@
 
     <div class="card">
       <h2>Drag in a FedEx label PDF</h2>
-      <p class="card-sub">FedEx Ship Manager labels only, domestic or international. The label's Terms &amp; Conditions / folding-instructions image (if present) is ignored automatically — only the label text is read.</p>
+      <p class="card-sub">FedEx Ship Manager labels are read automatically, domestic or international. A label from another carrier can still be dropped in and filled in by hand. The label's Terms &amp; Conditions / folding-instructions image (if present) is ignored automatically — only the label text is read.</p>
 
       <div class="dropzone" id="dropzone">
         <div id="dropzoneIdle">
@@ -57,7 +57,7 @@
 
     <div class="card" id="confirmCard" hidden>
       <h2>Confirm shipment details</h2>
-      <p class="card-sub">Auto-parsed from <span id="sourceFileName"></span> — check anything flagged below, then add the project and price.</p>
+      <p class="card-sub"><span id="confirmSubIntro">Auto-parsed from</span> <span id="sourceFileName"></span><span id="confirmSubRest"> — check anything flagged below, then add the project and price.</span></p>
       <p class="card-sub" id="queuePositionNote" hidden></p>
 
       <div class="confirm-layout">
@@ -71,6 +71,10 @@
 
         <div class="confirm-fields">
 
+      <div id="manualBanner" class="info-banner" hidden>
+        <strong>Manual entry.</strong> This label isn't one the app can read (e.g. another carrier), so nothing was filled in. Use the label on the left (click it to enlarge) and fill in the fields. Fields marked <span class="req">*</span> are required.
+      </div>
+
       <div id="multiPieceBanner" class="info-banner" hidden></div>
 
       <div id="warningsBanner" class="warning-banner" hidden>
@@ -81,7 +85,18 @@
       <p class="section-title">From the label</p>
       <div class="form-grid">
         <div class="field">
-          <label>Tracking number <span class="hint">(master, if multi-piece)</span></label>
+          <label>Carrier <span class="req manual-only" hidden>*</span></label>
+          <input type="text" id="f_carrier" list="carrierOptions" placeholder="e.g. FedEx" />
+          <datalist id="carrierOptions">
+            <option value="FedEx"></option>
+            <option value="Australia Post"></option>
+            <option value="UPS"></option>
+            <option value="DHL"></option>
+            <option value="USPS"></option>
+          </datalist>
+        </div>
+        <div class="field">
+          <label>Tracking number <span class="req manual-only" hidden>*</span> <span class="hint">(master, if multi-piece)</span></label>
           <input type="text" id="f_trackingNumber" />
         </div>
         <div class="field full" id="pieceTrackingRow" hidden>
@@ -89,7 +104,7 @@
           <input type="text" id="f_pieceTrackingNumbers" readonly />
         </div>
         <div class="field">
-          <label>Ship date</label>
+          <label>Ship date <span class="req manual-only" hidden>*</span></label>
           <input type="date" id="f_shipDate" />
         </div>
         <div class="field">
@@ -119,8 +134,17 @@
           </datalist>
         </div>
         <div class="field">
-          <label>Destination <span class="pill" id="intlPill" hidden></span></label>
-          <input type="text" id="f_destCountry" readonly />
+          <label>Destination country</label>
+          <input type="text" id="f_destCountry" readonly placeholder="e.g. US, AU" />
+        </div>
+        <div class="field">
+          <label>Shipment type <span class="req manual-only" hidden>*</span></label>
+          <select id="f_shipScope">
+            <option value="">Choose…</option>
+            <option value="domestic">Domestic (within the US)</option>
+            <option value="international">International (crosses a border)</option>
+            <option value="intlDomestic">International-domestic (within another country)</option>
+          </select>
         </div>
         <div class="field">
           <label>Weight</label>
@@ -175,11 +199,11 @@
       <p class="section-title" style="margin-top:20px;">You fill in</p>
       <div class="form-grid">
         <div class="field">
-          <label>Project</label>
+          <label>Project <span class="req">*</span></label>
           <select id="f_project"></select>
         </div>
         <div class="field">
-          <label>Price (USD)</label>
+          <label>Price (USD) <span class="req manual-only" hidden>*</span></label>
           <input type="number" id="f_price" step="0.01" min="0" placeholder="0.00" />
         </div>
         <div class="field full">
@@ -254,6 +278,7 @@
               <option value="">All</option>
               <option value="domestic">Domestic</option>
               <option value="international">International</option>
+              <option value="intlDomestic">International-domestic</option>
             </select>
           </div>
           <div class="field">

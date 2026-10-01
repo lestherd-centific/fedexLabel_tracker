@@ -341,27 +341,48 @@ fileInput.addEventListener("change", (e) => {
 
 async function handleFile(file) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-    showToast("Please drop a PDF file — FedEx Ship Manager labels export as PDF.", { type: "error" });
+    showToast("Please drop a PDF label file.", { type: "error" });
     return;
   }
   dropzoneIdle.hidden = true;
   dropzoneBusy.hidden = false;
+  let records = null;
   try {
-    const records = await parseFedexLabelFile(file);
-    if (!records.length) {
-      showToast("Couldn't find any FedEx label content in that PDF.", { type: "error" });
-      return;
-    }
-    parseQueue = records;
-    queueIndex = 0;
-    loadQueueItem();
+    records = await parseFedexLabelFile(file);
   } catch (err) {
     console.error(err);
-    showToast("Couldn't read that PDF. It may not be a FedEx Ship Manager label, or the file is corrupted.", { type: "error" });
+    showToast("Couldn't read that PDF — the file may be corrupted.", { type: "error" });
+    return;
   } finally {
     dropzoneIdle.hidden = false;
     dropzoneBusy.hidden = true;
     fileInput.value = "";
+  }
+
+  if (records.length) {
+    parseQueue = records;
+    queueIndex = 0;
+    loadQueueItem();
+    return;
+  }
+
+  // Not a FedEx label (e.g. another carrier): offer manual entry with the
+  // label still shown on the left, instead of just rejecting the file.
+  const manual = await showConfirm({
+    title: "Not a FedEx label",
+    message:
+      `The app can't read "${file.name}" automatically — it may be from another carrier.\n\n` +
+      "Enter the details by hand? The label stays visible next to the form.",
+    confirmLabel: "Enter manually",
+  });
+  if (!manual) return;
+  try {
+    parseQueue = [await buildManualRecord(file)];
+    queueIndex = 0;
+    loadQueueItem();
+  } catch (err) {
+    console.error(err);
+    showToast("Couldn't open that PDF for manual entry.", { type: "error" });
   }
 }
 
@@ -397,6 +418,10 @@ function advanceQueue() {
 // ---------- Confirm form ----------
 function populateConfirmForm(parsed) {
   document.getElementById("sourceFileName").textContent = parsed.sourceFile;
+  document.getElementById("confirmSubIntro").textContent = parsed.isManual ? "Manual entry for" : "Auto-parsed from";
+  document.getElementById("confirmSubRest").textContent = parsed.isManual
+    ? " — fill in the details from the label, then add the project and price."
+    : " — check anything flagged below, then add the project and price.";
 
   const previewImg = document.getElementById("labelPreviewImg");
   const previewBtn = document.getElementById("labelPreviewBtn");
@@ -411,6 +436,17 @@ function populateConfirmForm(parsed) {
   document.getElementById("f_shipDate").value = parsed.shipDate || "";
   document.getElementById("f_service").value = parsed.service || "";
   document.getElementById("f_destCountry").value = parsed.destCountry || "";
+  document.getElementById("f_carrier").value = parsed.carrier || "";
+  document.getElementById("f_shipScope").value = parsed.isManual ? "" : scopeFromBool(parsed.isInternational);
+
+  // Manual entry (a label the parser can't read): banner, required
+  // markers, and the label-derived fields that are normally read-only
+  // become editable.
+  const isManual = Boolean(parsed.isManual);
+  document.getElementById("manualBanner").hidden = !isManual;
+  document.querySelectorAll("#confirmCard .manual-only").forEach((el) => (el.hidden = !isManual));
+  document.getElementById("f_destCountry").readOnly = !isManual;
+  document.querySelectorAll("#confirmCard .field-missing").forEach((el) => el.classList.remove("field-missing"));
 
   // Multi-piece shipment: banner, bundled piece tracking numbers, and a
   // total-plus-breakdown weight instead of just one box's weight.
@@ -453,7 +489,7 @@ function populateConfirmForm(parsed) {
 
   // Service confidence pill
   const confPill = document.getElementById("serviceConfidencePill");
-  if (parsed.serviceConfidence === "labeled") {
+  if (parsed.isManual || parsed.serviceConfidence === "labeled") {
     confPill.hidden = true;
   } else if (parsed.serviceConfidence) {
     confPill.hidden = false;
@@ -463,16 +499,6 @@ function populateConfirmForm(parsed) {
     confPill.hidden = false;
     confPill.className = "pill pill-review";
     confPill.textContent = "not found — enter manually";
-  }
-
-  // International / domestic pill
-  const intlPill = document.getElementById("intlPill");
-  if (parsed.isInternational === null) {
-    intlPill.hidden = true;
-  } else {
-    intlPill.hidden = false;
-    intlPill.className = parsed.isInternational ? "pill pill-intl" : "pill pill-domestic";
-    intlPill.textContent = parsed.isInternational ? "International" : "Domestic";
   }
 
   // Warnings banner
@@ -536,7 +562,7 @@ async function openLabelLightbox() {
       // Wide enough for 2x zoom to stay crisp; capped so huge monitors
       // don't produce an enormous image.
       const width = Math.min(Math.max(window.innerWidth * 0.9, 900), 1600);
-      const url = await renderLabelPreview(parsed.previewPage, width);
+      const url = await renderLabelPreview(parsed.previewPage, width, { trim: Boolean(parsed.previewTrim) });
       largePreviewCache.set(parsed, url);
       if (!lightbox.hidden && currentParsed === parsed) lightboxImg.src = url;
     } catch (err) {
@@ -569,13 +595,46 @@ document.getElementById("discardBtn").addEventListener("click", () => {
   advanceQueue();
 });
 
+// Required on every add: Project. On a manual entry also: carrier,
+// tracking #, ship date, price and shipment type (typed by hand, so
+// they're easy to miss). Missing fields get outlined and listed.
+function missingRequiredFields() {
+  const required = [["f_project", "Project"]];
+  if (currentParsed && currentParsed.isManual) {
+    required.push(
+      ["f_carrier", "Carrier"],
+      ["f_trackingNumber", "Tracking number"],
+      ["f_shipDate", "Ship date"],
+      ["f_shipScope", "Shipment type"],
+      ["f_price", "Price"]
+    );
+  }
+  const missing = [];
+  for (const [id, label] of required) {
+    const el = document.getElementById(id);
+    const empty = String(el.value || "").trim() === "";
+    el.classList.toggle("field-missing", empty);
+    if (empty) missing.push({ el, label });
+  }
+  return missing;
+}
+
+// Clear a field's red "missing" outline as soon as it's filled in.
+["input", "change"].forEach((evt) =>
+  document.getElementById("confirmCard").addEventListener(evt, (e) => {
+    if (e.target.classList && String(e.target.value || "").trim()) e.target.classList.remove("field-missing");
+  })
+);
+
 document.getElementById("addToLogBtn").addEventListener("click", async () => {
   if (!currentParsed) return;
-  const project = document.getElementById("f_project").value;
-  if (!project) {
-    showToast("Pick a project before adding this to the log.", { type: "error" });
+  const missing = missingRequiredFields();
+  if (missing.length) {
+    showToast(`Fill in before adding: ${missing.map((m) => m.label).join(", ")}.`, { type: "error" });
+    missing[0].el.focus();
     return;
   }
+  const project = document.getElementById("f_project").value;
   const trackingNumber = document.getElementById("f_trackingNumber").value.trim();
 
   const addBtn = document.getElementById("addToLogBtn");
@@ -616,13 +675,16 @@ document.getElementById("addToLogBtn").addEventListener("click", async () => {
       return;
     }
 
+    const shipScope = document.getElementById("f_shipScope").value;
     const priceRaw = document.getElementById("f_price").value;
     const record = {
       trackingNumber,
       shipDate: document.getElementById("f_shipDate").value,
       service: document.getElementById("f_service").value,
-      destCountry: document.getElementById("f_destCountry").value,
-      isInternational: currentParsed.isInternational,
+      destCountry: document.getElementById("f_destCountry").value.trim().toUpperCase(),
+      carrier: document.getElementById("f_carrier").value.trim() || null,
+      shipScope: shipScope || null,
+      isInternational: shipScope ? shipScope !== "domestic" : currentParsed.isInternational,
       isMultiPiece: currentParsed.isMultiPiece,
       pieceCount: currentParsed.pieceCount,
       pieceTrackingNumbers: document.getElementById("f_pieceTrackingNumbers").value || null,
@@ -689,7 +751,7 @@ function parseWeightField(raw, fallbackUnit) {
 }
 
 // ---------- Sync to Excel (Power Automate) ----------
-// Builds exactly the JSON body the flow's trigger expects -- 24 fields,
+// Builds exactly the JSON body the flow's trigger expects -- 26 fields,
 // i.e. every Shipments column except `id`/`ts`, which the flow generates itself
 // (guid()/utcNow()) rather than trusting the browser's clock or a
 // client-generated id.
@@ -719,6 +781,8 @@ function shipmentPayload(record) {
     parseStatus: record.parseStatus,
     sourceFile: record.sourceFile,
     submittedBy: record.submittedBy,
+    carrier: record.carrier || "FedEx",
+    shipScope: scopeToExcel(record.shipScope),
   };
 }
 
@@ -822,6 +886,10 @@ function normalizeHistoryRow(row) {
     service: toStr(row.service),
     destCountry: toStr(row.destCountry),
     isInternational: toBool(row.isInternational),
+    // Older rows (before these columns existed) are blank: treat them as
+    // FedEx, with the type derived from isInternational.
+    carrier: toStr(row.carrier).trim() || "FedEx",
+    shipScope: scopeFromExcel(row.shipScope) || scopeFromBool(toBool(row.isInternational)),
     isMultiPiece: toBool(row.isMultiPiece),
     pieceCount: toNumOrNull(row.pieceCount) ?? 1,
     pieceTrackingNumbers: toStrOrNull(row.pieceTrackingNumbers),
@@ -935,7 +1003,7 @@ function renderLog() {
   for (const r of pageRows) {
     const tr = document.createElement("tr");
 
-    const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
+    const destPill = scopePill(r);
     const statusPill =
       r.parseStatus === "ok" ? '<span class="pill pill-ok">OK</span>' : reviewPill(r);
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
@@ -947,7 +1015,7 @@ function renderLog() {
     const syncCell = syncStatusCell(r.syncStatus, idx);
 
     tr.innerHTML = `
-      <td>${trackingLink(r.trackingNumber)}${multiBadge}</td>
+      <td>${trackingLink(r.trackingNumber, r.carrier)}${multiBadge}</td>
       <td>${escapeHtml(r.shipDate || "—")}</td>
       <td>${escapeHtml(r.service || "—")}</td>
       <td>${destPill} ${escapeHtml(r.destCountry || "")}</td>
@@ -1132,8 +1200,7 @@ function getFilteredLog() {
   return shipmentHistory.filter((r) => {
     if (project && r.project !== project) return false;
     if (submittedBy && r.submittedBy !== submittedBy) return false;
-    if (destination === "domestic" && r.isInternational !== false) return false;
-    if (destination === "international" && r.isInternational !== true) return false;
+    if (destination && rowScope(r) !== destination) return false;
     if (dateFrom && r.shipDate && r.shipDate < dateFrom) return false;
     if (dateTo && r.shipDate && r.shipDate > dateTo) return false;
     return true;
@@ -1194,12 +1261,12 @@ function renderExpenses() {
   } else {
     detailEmpty.hidden = true;
     for (const r of filtered) {
-      const destPill = `<span class="pill ${r.isInternational ? "pill-intl" : "pill-domestic"}">${r.isInternational ? "Intl" : "US"}</span>`;
+      const destPill = scopePill(r);
       const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
       const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${trackingLink(r.trackingNumber)}${multiBadge}</td>
+        <td>${trackingLink(r.trackingNumber, r.carrier)}${multiBadge}</td>
         <td>${escapeHtml(r.shipDate || "—")}</td>
         <td>${escapeHtml(r.project)}</td>
         <td>${escapeHtml(r.submittedBy || "—")}</td>
@@ -1233,8 +1300,48 @@ function escapeHtml(str) {
 // but that's not something we have or need). If a shipment's tracking
 // number ages out of FedEx's own retention window, this will land on
 // FedEx's "we can't find that tracking number" page rather than erroring.
-function trackingLink(trackingNumber) {
+// ---------- Shipment type (Domestic / International / International-domestic) ----------
+// Stored in the Shipments `shipScope` column as the readable label, so
+// it's easy to edit straight in Excel; used in code as a short key.
+const SCOPE_LABELS = {
+  domestic: "Domestic",
+  international: "International",
+  intlDomestic: "International-domestic",
+};
+function scopeToExcel(code) {
+  return SCOPE_LABELS[code] || "";
+}
+function scopeFromExcel(v) {
+  const s = toStr(v).trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (!s) return "";
+  if (s === "domestic") return "domestic";
+  if (s === "international") return "international";
+  if (s === "international-domestic" || s === "intl-domestic" || s === "intldomestic") return "intlDomestic";
+  return "";
+}
+function scopeFromBool(isInternational) {
+  if (isInternational === null || isInternational === undefined) return "";
+  return isInternational ? "international" : "domestic";
+}
+function rowScope(r) {
+  return r.shipScope || scopeFromBool(r.isInternational) || "domestic";
+}
+function scopePill(r) {
+  const scope = rowScope(r);
+  if (scope === "intlDomestic") {
+    return '<span class="pill pill-intldom" title="International-domestic: shipped within another country">Intl-Dom</span>';
+  }
+  if (scope === "international") return '<span class="pill pill-intl">Intl</span>';
+  return '<span class="pill pill-domestic">US</span>';
+}
+
+function trackingLink(trackingNumber, carrier) {
   if (!trackingNumber) return "—";
+  // Only FedEx numbers get a link (to FedEx's tracker). Another carrier's
+  // number shown as plain text, with the carrier named underneath.
+  if (carrier && !/^fedex$/i.test(String(carrier).trim())) {
+    return `${escapeHtml(trackingNumber)}<div class="carrier-note">${escapeHtml(carrier)}</div>`;
+  }
   const url = `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(trackingNumber)}`;
   return `<a href="${url}" target="_blank" rel="noopener">${escapeHtml(trackingNumber)}</a>`;
 }

@@ -368,6 +368,7 @@ button {
 .pill-review { background: var(--cond-fair-bg); color: var(--cond-fair); }
 .pill-intl { background: var(--c-pink-soft); color: var(--c-pink); }
 .pill-domestic { background: var(--st-instock-bg); color: var(--st-instock); }
+.pill-intldom { background: var(--c-violet-soft); color: var(--c-violet); }
 .pill-muted { background: var(--hover-bg); color: var(--sub); }
 .pill-error { background: var(--st-broken-bg); color: var(--st-broken); }
 
@@ -721,3 +722,14 @@ body.lightbox-open { overflow: hidden; }
   padding: 4px 12px;
   font-size: 12px;
 }
+
+/* ---- Manual entry / required fields ---- */
+.req { color: var(--st-broken); font-weight: 700; }
+.field-missing,
+.field input.field-missing,
+.field select.field-missing {
+  border-color: var(--st-broken);
+  box-shadow: 0 0 0 2px var(--st-broken-bg);
+}
+.field input[readonly] { background: var(--hover-bg); color: var(--sub); }
+.carrier-note { font-size: 11.5px; color: var(--sub); font-weight: 500; margin-top: 2px; }
