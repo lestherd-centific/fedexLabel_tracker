@@ -54,6 +54,7 @@ let CREDENTIALS = [];
 let PROJECTS = [];
 
 const LOG_PAGE_SIZE = 10;
+const rowRecords = new WeakMap(); // history <tr> -> its shipment record (for the overview)
 let logPage = 0; // 0-indexed
 
 let currentParsed = null;
@@ -1011,13 +1012,16 @@ function renderLog() {
     const priceStr = r.price != null && !isNaN(r.price) ? `$${r.price.toFixed(2)}` : "—";
 
     const multiBadge = r.isMultiPiece ? ` <span class="pill pill-muted">×${r.pieceCount}</span>` : "";
+    const noteMark = String(r.notes || "").trim()
+      ? ` <span class="note-mark" title="Has a note — click the row to read it" aria-label="Has a note">📝</span>`
+      : "";
     // Index within the FULL (unsorted, unpaginated) array -- delete/retry
     // splice/act on shipmentHistory itself, not the page-local slice.
     const idx = shipmentHistory.indexOf(r);
     const syncCell = syncStatusCell(r.syncStatus, idx);
 
     tr.innerHTML = `
-      <td>${trackingLink(r.trackingNumber, r.carrier)}${multiBadge}</td>
+      <td>${trackingLink(r.trackingNumber, r.carrier)}${multiBadge}${noteMark}</td>
       <td>${escapeHtml(r.shipDate || "—")}</td>
       <td>${escapeHtml(r.service || "—")}</td>
       <td>${destPill} ${escapeHtml(r.destCountry || "")}</td>
@@ -1028,6 +1032,13 @@ function renderLog() {
       <td>${syncCell}</td>
       <td><button class="icon-btn log-delete-btn" type="button" data-idx="${idx}" title="Delete this shipment from the log">🗑</button></td>
     `;
+    // Click (or Enter on) a row -> quick overview. The row keeps a direct
+    // reference to its record, so a refresh reordering the list can't
+    // open the wrong shipment.
+    tr.className = "log-row";
+    tr.tabIndex = 0;
+    tr.title = "Click for a quick overview";
+    rowRecords.set(tr, r);
     body.appendChild(tr);
   }
 
@@ -1134,7 +1145,20 @@ document.getElementById("logTableBody").addEventListener("click", (e) => {
   if (retryBtn) {
     const r = shipmentHistory[parseInt(retryBtn.dataset.retryIdx, 10)];
     if (r) syncRecordToExcel(r);
+    return;
   }
+  // Links (FedEx tracking) and the Review pill (tap shows its hover) keep
+  // their own behavior; anywhere else on the row opens the overview.
+  if (e.target.closest("a, button, .review-tip")) return;
+  const tr = e.target.closest("tr.log-row");
+  if (tr && rowRecords.has(tr)) openShipmentOverview(rowRecords.get(tr));
+});
+document.getElementById("logTableBody").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.target.matches("tr.log-row")) return;
+  // preventDefault: otherwise the same Enter "clicks" the overview's ✕
+  // button (focus moves there on open) and closes it instantly.
+  e.preventDefault();
+  if (rowRecords.has(e.target)) openShipmentOverview(rowRecords.get(e.target));
 });
 
 // A row that's already synced to Excel (has a real `id`) AND has the
@@ -1185,6 +1209,89 @@ async function requestDeleteLogEntry(idx) {
     showToast("Couldn't delete that row from Excel — nothing was removed. Try again.", { type: "error" });
   }
 }
+
+// ---------- Shipment overview (click a history row) ----------
+// A quick read-only card: who sent it where (sender -> recipient), the
+// key facts, and the notes. Close with ✕, Esc, or a click outside.
+const overview = document.getElementById("shipmentOverview");
+let overviewReturnFocus = null;
+
+function ovText(v, fallback = "—") {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  return s ? escapeHtml(s) : `<span class="ov-empty">${fallback}</span>`;
+}
+function ovParty(role, name, address, phone, country) {
+  return `
+    <div class="ov-party">
+      <div class="ov-role">${role}</div>
+      <div class="ov-name">${ovText(name, "No name")}</div>
+      <div class="ov-addr">${ovText(address, "No address")}</div>
+      ${phone ? `<div class="ov-phone">📞 ${escapeHtml(phone)}</div>` : ""}
+      ${country ? `<div class="ov-country">${escapeHtml(country)}</div>` : ""}
+    </div>`;
+}
+
+function openShipmentOverview(r) {
+  overviewReturnFocus = document.activeElement;
+  const scope = rowScope(r);
+  const travel = scope === "domestic" ? "🚚" : "✈️";
+  const carrier = r.carrier || "FedEx";
+  const priceStr = r.price != null && !isNaN(r.price) ? `$${Number(r.price).toFixed(2)}` : null;
+  const weightStr = r.totalWeight != null && !isNaN(r.totalWeight) ? `${r.totalWeight} ${r.totalWeightUnit || ""}`.trim() : null;
+  const pieces = r.isMultiPiece ? `${r.pieceCount} boxes${r.pieceTrackingNumbers ? ` · ${r.pieceTrackingNumbers}` : ""}` : "1 box";
+  const facts = [
+    ["Carrier", carrier],
+    ["Service", r.service],
+    ["Ship date", r.shipDate],
+    ["Shipment type", SCOPE_LABELS[scope]],
+    ["Weight", weightStr],
+    ["Pieces", pieces],
+    ["Project", r.project],
+    ["Price", priceStr],
+    ["Submitted by", r.submittedBy],
+    ["Reference", r.reference],
+    ["Invoice / PO / Dept", r.invoicePoDept],
+    ["Source file", r.sourceFile],
+  ];
+  const note = String(r.notes || "").trim();
+
+  document.getElementById("ovTitle").innerHTML =
+    `${r.trackingNumber ? escapeHtml(r.trackingNumber) : "No tracking #"} <span class="ov-sub">${escapeHtml(carrier)}</span>`;
+  document.getElementById("ovPills").innerHTML = scopePill(r);
+  document.getElementById("ovBody").innerHTML = `
+    <div class="ov-route">
+      ${ovParty("From", r.senderName, r.senderAddress, r.senderPhone, "")}
+      <div class="ov-arrow" aria-hidden="true">
+        <span class="ov-line"></span><span class="ov-icon">${travel}</span><span class="ov-line"></span>
+        <div class="ov-arrow-label">${ovText(r.service, carrier)}${r.shipDate ? `<br>${escapeHtml(r.shipDate)}` : ""}</div>
+      </div>
+      ${ovParty("To", r.recipientName, r.recipientAddress, r.recipientPhone, r.destCountry)}
+    </div>
+    <dl class="ov-facts">
+      ${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${ovText(v)}</dd></div>`).join("")}
+    </dl>
+    <div class="ov-notes">
+      <div class="ov-role">📝 Notes</div>
+      ${note ? `<p>${escapeHtml(note)}</p>` : `<p class="ov-empty">No notes for this shipment.</p>`}
+    </div>`;
+  overview.hidden = false;
+  document.body.classList.add("lightbox-open");
+  document.getElementById("ovClose").focus();
+}
+
+function closeShipmentOverview() {
+  if (overview.hidden) return;
+  overview.hidden = true;
+  document.body.classList.remove("lightbox-open");
+  if (overviewReturnFocus && overviewReturnFocus.focus) overviewReturnFocus.focus();
+}
+document.getElementById("ovClose").addEventListener("click", closeShipmentOverview);
+overview.addEventListener("click", (e) => {
+  if (e.target === overview) closeShipmentOverview();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !overview.hidden) closeShipmentOverview();
+});
 
 // ---------- Expenses by Project tab ----------
 // (Project / Submitted-by filter options are filled by

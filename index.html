@@ -368,6 +368,21 @@
   </div>
 </div>
 
+<!-- Shipment overview (click a row in Shipment history) -->
+<div class="modal-backdrop overview-backdrop" id="shipmentOverview" hidden role="dialog" aria-modal="true" aria-labelledby="ovTitle">
+  <div class="modal overview-modal">
+    <div class="ov-head">
+      <div>
+        <div class="kicker">Shipment overview</div>
+        <h2 id="ovTitle"></h2>
+        <div id="ovPills"></div>
+      </div>
+      <button type="button" class="btn" id="ovClose" aria-label="Close">✕</button>
+    </div>
+    <div id="ovBody"></div>
+  </div>
+</div>
+
 <!-- Toasts (replaces alert()) -->
 <div class="toast-container" id="toastContainer"></div>
 
