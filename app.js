@@ -146,8 +146,13 @@ function findCredential(login) {
   return CREDENTIALS.find((c) => c.login.toLowerCase() === needle) || null;
 }
 
+function hideLoading() {
+  document.getElementById("loadingBackdrop").hidden = true;
+}
+
 function showApp(cred) {
   currentUser = cred;
+  hideLoading();
   document.getElementById("loginBackdrop").hidden = true;
   document.getElementById("app").hidden = false;
   document.getElementById("whoami").hidden = false;
@@ -156,6 +161,7 @@ function showApp(cred) {
 
 function showLogin() {
   currentUser = null;
+  hideLoading();
   document.getElementById("loginBackdrop").hidden = false;
   document.getElementById("app").hidden = true;
   document.getElementById("whoami").hidden = true;
@@ -183,6 +189,9 @@ async function loadLookups() {
 }
 
 let lookupsLoaded = false;
+// False until the first history load from Excel finishes (either way),
+// so the empty table says "Loading…" rather than "No shipments yet."
+let historyLoadedOnce = false;
 
 function setLoginBusy(busy, label) {
   const btn = document.getElementById("loginBtn");
@@ -234,9 +243,13 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 // On load: show the login modal in a "loading" state, pull Credentials
 // and Projects from Excel, then either restore the remembered login (if
 // it's still in the Credentials tab) or leave the modal up.
+// The "Loading…" screen (in index.html) is up from the first paint; it
+// stays until this check finishes, then gives way to the app (remembered,
+// still-valid login) or the Sign in box (no login, removed login, or
+// Excel unreachable -- with the error shown there).
 (async function initSession() {
-  showLogin();
-  setLoginBusy(true);
+  const savedLogin = localStorage.getItem(STORAGE_USER_KEY);
+  if (!savedLogin) document.getElementById("loadingMsg").textContent = "Loading logins from Excel.";
   try {
     await loadLookups();
     lookupsLoaded = true;
@@ -246,12 +259,15 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
       "Couldn't load logins from Excel. Enter your login to try again.";
   }
   setLoginBusy(false);
-  if (!lookupsLoaded) return;
 
-  const savedLogin = localStorage.getItem(STORAGE_USER_KEY);
-  const cred = savedLogin ? findCredential(savedLogin) : null;
-  if (cred) showApp(cred);
-  else if (savedLogin) localStorage.removeItem(STORAGE_USER_KEY); // removed from Credentials
+  const cred = lookupsLoaded && savedLogin ? findCredential(savedLogin) : null;
+  if (cred) {
+    showApp(cred);
+    return;
+  }
+  if (lookupsLoaded && savedLogin) localStorage.removeItem(STORAGE_USER_KEY); // removed from Credentials
+  showLogin();
+  document.getElementById("loginInput").focus();
 })();
 
 // ---------- Project dropdowns (log form + Expenses filters) ----------
@@ -982,6 +998,7 @@ document.getElementById("historyRefreshBtn").addEventListener("click", async () 
 function renderLog() {
   const body = document.getElementById("logTableBody");
   const emptyRow = document.getElementById("logEmptyRow");
+  emptyRow.textContent = historyLoadedOnce ? "No shipments yet." : "Loading shipments from Excel…";
   const pagination = document.getElementById("logPagination");
   body.innerHTML = "";
 
@@ -1475,6 +1492,7 @@ function trackingLink(trackingNumber, carrier) {
 // and then repopulate a moment later.
 (async function initHistory() {
   await refreshHistoryFromExcel();
+  historyLoadedOnce = true;
   renderLog();
   renderExpenses();
 })();

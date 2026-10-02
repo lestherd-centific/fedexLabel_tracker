@@ -815,3 +815,19 @@ body.lightbox-open { overflow: hidden; }
   .ov-arrow-label { flex-basis: auto; }
   .ov-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---- Startup loading screen ---- */
+.modal.loading-modal { text-align: center; max-width: 320px; }
+.loading-modal h2 { margin: 14px 0 6px !important; }
+.loading-modal p { margin: 0; color: var(--sub); font-size: 13.5px; }
+.spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 3px solid var(--c-violet-soft);
+  border-top-color: var(--c-violet);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }

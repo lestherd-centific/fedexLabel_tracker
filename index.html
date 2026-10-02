@@ -247,7 +247,7 @@
         </thead>
         <tbody id="logTableBody"></tbody>
       </table>
-      <div class="empty-row" id="logEmptyRow">No shipments yet.</div>
+      <div class="empty-row" id="logEmptyRow">Loading shipments from Excel…</div>
       <div class="pagination" id="logPagination" hidden>
         <button class="btn" id="logPrevPage" type="button">← Prev</button>
         <span id="logPageInfo" class="hint"></span>
@@ -342,8 +342,18 @@
   <footer class="note">Shipment Cost Tracker · matches the Hardware Management app's theme</footer>
 </div>
 
-<!-- Login modal -->
-<div class="modal-backdrop" id="loginBackdrop">
+<!-- Startup loading screen: shown while logins are checked against
+     Excel, so a remembered user doesn't see a login box flash up. -->
+<div class="modal-backdrop" id="loadingBackdrop" role="status" aria-live="polite">
+  <div class="modal loading-modal">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2>Loading…</h2>
+    <p id="loadingMsg">Checking your sign-in and syncing with Excel.</p>
+  </div>
+</div>
+
+<!-- Login modal (hidden until the startup check decides it's needed) -->
+<div class="modal-backdrop" id="loginBackdrop" hidden>
   <div class="modal">
     <h2>Sign in</h2>
     <div class="field">
