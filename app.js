@@ -146,8 +146,14 @@ function findCredential(login) {
   return CREDENTIALS.find((c) => c.login.toLowerCase() === needle) || null;
 }
 
+// Fades the startup splash out, then removes it from view.
 function hideLoading() {
-  document.getElementById("loadingBackdrop").hidden = true;
+  const splash = document.getElementById("loadingBackdrop");
+  if (splash.hidden || splash.classList.contains("splash-out")) return;
+  splash.classList.add("splash-out");
+  setTimeout(() => {
+    splash.hidden = true;
+  }, 300);
 }
 
 function showApp(cred) {
@@ -249,7 +255,7 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 // Excel unreachable -- with the error shown there).
 (async function initSession() {
   const savedLogin = localStorage.getItem(STORAGE_USER_KEY);
-  if (!savedLogin) document.getElementById("loadingMsg").textContent = "Loading logins from Excel.";
+  if (!savedLogin) document.getElementById("loadingMsg").textContent = "Loading… getting things ready.";
   try {
     await loadLookups();
     lookupsLoaded = true;

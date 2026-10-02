@@ -816,13 +816,25 @@ body.lightbox-open { overflow: hidden; }
   .ov-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* ---- Startup loading screen ---- */
-.modal.loading-modal { text-align: center; max-width: 320px; }
-.loading-modal h2 { margin: 14px 0 6px !important; }
-.loading-modal p { margin: 0; color: var(--sub); font-size: 13.5px; }
+/* ---- Startup splash (full window) ---- */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above everything, incl. the Sign in pop-up and toasts */
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  transition: opacity .3s ease;
+}
+.splash.splash-out { opacity: 0; pointer-events: none; }
+.splash-inner { text-align: center; max-width: 360px; }
+.splash-title { font-size: 24px; font-weight: 700; color: var(--ink); margin: 6px 0 26px; }
+.splash p { margin: 18px 0 0; color: var(--sub); font-size: 13.5px; }
 .spinner {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   margin: 0 auto;
   border-radius: 50%;
   border: 3px solid var(--c-violet-soft);
@@ -830,4 +842,7 @@ body.lightbox-open { overflow: hidden; }
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+  .splash { transition: none; }
+}

@@ -342,13 +342,15 @@
   <footer class="note">Shipment Cost Tracker · matches the Hardware Management app's theme</footer>
 </div>
 
-<!-- Startup loading screen: shown while logins are checked against
-     Excel, so a remembered user doesn't see a login box flash up. -->
-<div class="modal-backdrop" id="loadingBackdrop" role="status" aria-live="polite">
-  <div class="modal loading-modal">
+<!-- Startup splash: covers the whole window while logins are checked
+     against Excel. When it finishes it fades out to the app (remembered
+     login) or to the Sign in pop-up. -->
+<div class="splash" id="loadingBackdrop" role="status" aria-live="polite">
+  <div class="splash-inner">
+    <div class="kicker">Shipment Tracker</div>
+    <div class="splash-title">FedEx Shipment Cost Tracker</div>
     <div class="spinner" aria-hidden="true"></div>
-    <h2>Loading…</h2>
-    <p id="loadingMsg">Checking your sign-in and syncing with Excel.</p>
+    <p id="loadingMsg">Checking your sign-in and syncing with Excel…</p>
   </div>
 </div>
 
