@@ -5,7 +5,7 @@
 // an up-to-date duplicate check), and can be reloaded on demand with the
 // Refresh button. Logins (Credentials tab) and the project list
 // (Projects tab) are also read live from Excel on every load -- see
-// EXCEL_LOOKUPS_URL below; data.js is no longer used. The remembered
+// EXCEL_LOOKUPS_URL below. The remembered
 // login and dark-mode preference are the only things kept in
 // localStorage, as light per-viewer conveniences.
 
